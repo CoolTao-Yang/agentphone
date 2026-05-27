@@ -1,0 +1,17 @@
+[Unit]
+Description=claude4phone server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__INSTALL_DIR__
+EnvironmentFile=-__HOME__/.config/claude4phone/env
+ExecStart=/usr/bin/env npm start
+Restart=on-failure
+RestartSec=5s
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

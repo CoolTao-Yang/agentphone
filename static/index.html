@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0d0c0b">
+  <meta name="color-scheme" content="dark">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="format-detection" content="telephone=no">
+
+  <title>claude4phone</title>
+
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/svg+xml" href="icon.svg">
+  <link rel="apple-touch-icon" href="icon.svg">
+
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11/styles/atom-one-dark.min.css">
+
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11/highlight.min.js" defer></script>
+
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js').catch((e) => console.warn('sw register failed', e));
+      });
+    }
+  </script>
+
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <div id="app">
+    <header>
+      <button class="h-btn" id="open-drawer" title="sessions" aria-label="打开 session 列表">☰</button>
+      <span class="h-title">
+        <b>claude</b><span style="opacity:.7;">4phone</span>
+        <span class="h-cwd" id="h-cwd" title=""></span>
+      </span>
+      <span class="h-status" title="WebSocket state">
+        <span class="h-dot" id="status-dot"></span>
+        <span id="status-text">连接中</span>
+      </span>
+      <button class="h-btn" id="tts-toggle" aria-pressed="false" title="朗读回复">🔈</button>
+      <button class="h-btn" id="debug-toggle" aria-pressed="false" title="调试日志">⚙</button>
+    </header>
+
+    <main id="messages">
+      <div class="empty" id="empty">
+        ☰ 选择 session 或 + 新建一个。<br>
+        <span style="opacity:.65;font-size:11px;">敲字 → <kbd>↑</kbd> 发送 / 按 🎤 语音输入。</span>
+      </div>
+    </main>
+
+    <footer>
+      <button class="action mic" id="mic-btn" aria-pressed="false" title="语音输入" aria-label="语音输入">🎤</button>
+      <textarea class="composer-input" id="input" rows="1"
+                placeholder="问 claude…"
+                autocomplete="off" autocapitalize="off" spellcheck="false"></textarea>
+      <button class="action send" id="send-btn" disabled aria-label="发送">↑</button>
+      <button class="action stop hidden" id="stop-btn" title="打断" aria-label="打断">■</button>
+    </footer>
+  </div>
+
+  <!-- session drawer -->
+  <div class="drawer-backdrop" id="drawer-bd"></div>
+  <aside class="drawer" id="drawer" aria-hidden="true">
+    <div class="drawer-head">
+      <button class="h-btn" id="close-drawer" title="关闭">←</button>
+      <h2>sessions</h2>
+      <button class="drawer-new" id="new-session">+ 新建</button>
+    </div>
+    <div class="drawer-list" id="session-list">
+      <div class="empty" style="padding:24px 16px;font-size:12px;">加载中…</div>
+    </div>
+  </aside>
+
+  <!-- new session modal -->
+  <div class="modal-backdrop" id="new-modal">
+    <div class="modal">
+      <h3>新建 session</h3>
+      <label for="ns-name">备注名（可选）</label>
+      <input type="text" id="ns-name" placeholder="例如: 改 main.ts" maxlength="80">
+
+      <label for="ns-cwd">工作目录</label>
+      <input type="text" id="ns-cwd" placeholder="/home/yzt/test/...">
+
+      <ul class="cwd-suggest" id="ns-cwd-suggest"></ul>
+
+      <div class="modal-actions">
+        <button class="modal-btn" data-close>取消</button>
+        <button class="modal-btn primary" id="ns-create">创建</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- rename session modal -->
+  <div class="modal-backdrop" id="rename-modal">
+    <div class="modal">
+      <h3>重命名 session</h3>
+      <label for="rn-name">备注名（空则移除）</label>
+      <input type="text" id="rn-name" placeholder="备注名" maxlength="80">
+
+      <div class="modal-actions">
+        <button class="modal-btn" data-close>取消</button>
+        <button class="modal-btn primary" id="rn-save">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- toast + debug overlay -->
+  <div class="toast" id="toast"></div>
+  <div class="debug" id="debug"></div>
+</body>
+</html>

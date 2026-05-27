@@ -1,0 +1,25 @@
+node_modules/
+*.log
+*.tsbuildinfo
+
+# Local env / token files
+.env
+.env.*
+!.env.example
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Runtime
+/tmp/
+.cache/
+
+# Optional: ignore lockfile if you don't want to commit it
+# package-lock.json
