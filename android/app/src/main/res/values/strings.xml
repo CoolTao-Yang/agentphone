@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">agentphone</string>
+    <string name="title_activity_main">agentphone</string>
+    <string name="package_name">com.cooltao.agentphone</string>
+    <string name="custom_url_scheme">com.cooltao.agentphone</string>
+</resources>

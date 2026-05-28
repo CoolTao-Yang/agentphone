@@ -256,6 +256,72 @@ journalctl --user -u agentphone -f
     └── install-autostart.sh
 ```
 
+## Build an APK (optional)
+
+If you prefer a real installable Android app over the "Add to Home
+Screen" PWA, `agentphone` ships a [Capacitor](https://capacitorjs.com/)
+wrapper. The APK is a thin native shell whose WebView loads the
+PWA from your local agentphone server (over Tailscale).
+
+### Two ways to get an APK
+
+**A. GitHub Actions (no local Android setup)**
+
+Push to `main` (or trigger `Build Android APK` in the Actions tab) and
+GitHub will build a debug APK and attach it as a workflow artifact.
+Download, sideload onto your phone.
+
+To override the baked-in server URL for one build (e.g. testing a
+different Tailscale IP), use the workflow's `server_url` input.
+
+**B. Local build via Android Studio**
+
+```bash
+# one-time on your dev machine
+#   - install Android Studio (or Android SDK + JDK 17)
+#   - accept SDK licences
+
+cd agentphone
+npx cap sync android         # copies static/ into the android project
+npx cap open android         # opens the project in Android Studio
+# then: Build → Build Bundle(s) / APK(s) → Build APK(s)
+```
+
+Or fully headless:
+
+```bash
+cd android
+./gradlew assembleDebug
+# APK ends up at android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+### Install on phone
+
+1. Enable **Developer options** → **USB debugging** on the phone
+2. Plug into your computer
+3. `adb install android/app/build/outputs/apk/debug/app-debug.apk`
+
+Or just send the `.apk` file to the phone (Google Drive, email, file
+share) and tap to install (you'll need to allow "Install unknown apps"
+once for the file source).
+
+### Change the baked-in server URL
+
+The Tailscale URL is set in [`capacitor.config.ts`](capacitor.config.ts):
+
+```ts
+server: {
+  url: process.env.AGENTPHONE_SERVER_URL || 'http://100.119.115.75:8765/launch',
+  cleartext: true,
+}
+```
+
+To rebuild with a different URL: edit the literal **or** set
+`AGENTPHONE_SERVER_URL=...` before `npx cap sync android && cd android && ./gradlew assembleDebug`.
+
+> v2 will read the server URL from a settings screen at runtime so
+> you don't need to rebuild the APK when the IP changes.
+
 ## Roadmap
 
 Concrete next steps, roughly priority-ordered:
