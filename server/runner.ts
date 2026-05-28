@@ -67,17 +67,23 @@ export class TurnRunner {
   isActive(): boolean { return this.active !== null; }
   turnId(): string | null { return this.currentTurnId; }
 
-  /** Snapshot of current activity, used in WS 'connected' replay. */
+  /** Snapshot of current activity, used in WS 'connected' replay.
+   *  We keep the buffer around AFTER the turn completes too — that way a
+   *  phone whose network died mid-stream can reconnect after the turn
+   *  finishes and still see the full reply. The buffer is reset only when
+   *  a new turn starts. */
   activeState(): ActiveTurnState | null {
-    if (!this.active || !this.currentTurnId) return null;
+    if (!this.currentTurnId) return null;
     const events: AgentEvent[] = [];
     for (const e of this.buffer) {
       if (e.kind === 'agent_event') events.push(e.event);
     }
+    if (events.length === 0) return null;
     return {
       turnId: this.currentTurnId,
       startedAt: this.startedAtMs,
       events,
+      done: this.active === null,
     };
   }
 
@@ -98,7 +104,7 @@ export class TurnRunner {
   }
 
   /** Start a turn. Throws if one is already active. */
-  start(opts: { prompt: string; cwd: string; sessionId: string | null }): string {
+  start(opts: { prompt: string; images?: import('../shared/types.ts').ImageAttachment[]; cwd: string; sessionId: string | null }): string {
     if (this.active) throw new Error('上一个对话还在进行');
 
     this.buffer = [];
@@ -145,6 +151,7 @@ export class TurnRunner {
 
     const turn = this.agent.startTurn({
       prompt: opts.prompt,
+      images: opts.images,
       cwd: opts.cwd,
       sessionId: opts.sessionId,
       canUseTool,

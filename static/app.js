@@ -25,6 +25,9 @@
   const $send       = document.getElementById('send-btn');
   const $stop       = document.getElementById('stop-btn');
   const $mic        = document.getElementById('mic-btn');
+  const $attachBtn  = document.getElementById('attach-btn');
+  const $filePicker = document.getElementById('file-picker');
+  const $chips      = document.getElementById('attach-chips');
   const $tts        = document.getElementById('tts-toggle');
   const $debugBtn   = document.getElementById('debug-toggle');
   const $debug      = document.getElementById('debug');
@@ -60,6 +63,8 @@
   let currentCwd = '';
   let defaultCwd = '';
   let renamingSessionId = null;
+  /** @type {Array<{ data: string, mediaType: string, name?: string }>} */
+  let pendingImages = [];
 
   // streaming text state per (messageId:blockIndex)
   /** @type {Map<string, { rawText: string, el: HTMLElement, pendingRender: boolean, lastRender: number, kind: 'text'|'thinking' }>} */
@@ -112,7 +117,7 @@
   }
   function setBusy(b) {
     busy = b;
-    $send.disabled = busy || !$input.value.trim();
+    $send.disabled = busy || (!$input.value.trim() && pendingImages.length === 0);
     $stop.classList.toggle('hidden', !busy);
     $send.classList.toggle('hidden', busy);
     if (busy) setStatus('busy', '思考中');
@@ -236,7 +241,7 @@
   }
 
   // ─── user message ─────────────────────────────────────────────
-  function appendUser(text) {
+  function appendUser(text, images) {
     clearEmpty();
     const div = document.createElement('div');
     div.className = 'msg user';
@@ -245,7 +250,29 @@
     who.textContent = '你';
     const body = document.createElement('div');
     body.className = 'body';
-    body.textContent = text;
+    if (text) body.textContent = text;
+    if (images && images.length) {
+      const imgs = document.createElement('div');
+      imgs.className = 'msg-images';
+      for (const img of images) {
+        const el = document.createElement('img');
+        el.className = 'msg-img-thumb';
+        el.src = `data:${img.mediaType};base64,${img.data}`;
+        el.alt = img.name || 'image';
+        el.addEventListener('click', () => {
+          const w = window.open('', '_blank');
+          if (w) {
+            w.document.write(
+              `<title>${escapeHtml(img.name || 'image')}</title>` +
+              `<body style="margin:0;background:#0d0c0b;display:flex;align-items:center;justify-content:center;height:100vh">` +
+              `<img src="${el.src}" style="max-width:100%;max-height:100%"></body>`
+            );
+          }
+        });
+        imgs.appendChild(el);
+      }
+      body.appendChild(imgs);
+    }
     div.appendChild(who);
     div.appendChild(body);
     $messages.appendChild(div);
@@ -485,19 +512,24 @@
           setCwdDisplay(m.currentCwd);
           setAccountDisplay(m.claudeAccount);
           currentSessionId = m.currentSessionId;
-          log('ok', `connected, account=${m.claudeAccount}, cwd=${m.currentCwd}`);
-          // If a turn is still in-flight on the server (we disconnected
-          // mid-conversation), replay the buffered events and reattach.
+          log('ok',
+            `connected · account=${m.claudeAccount} · cwd=${m.currentCwd} · ` +
+            `turn=${m.activeTurn ? (m.activeTurn.done ? 'done' : 'running') : 'none'}`);
           if (m.activeTurn && m.activeTurn.events && m.activeTurn.events.length) {
             clearMessages();
             for (const e of m.activeTurn.events) dispatchAgentEvent(e);
             const sec = Math.max(1, Math.round((Date.now() - m.activeTurn.startedAt) / 1000));
             const sep = document.createElement('div');
             sep.className = 'history-sep';
-            sep.textContent = `── 已恢复 ${m.activeTurn.events.length} 条事件（${sec}s 前开始）· server 还在跑 ──`;
+            sep.textContent = m.activeTurn.done
+              ? `── 已恢复 ${m.activeTurn.events.length} 条事件（${sec}s 前完成）──`
+              : `── 已恢复 ${m.activeTurn.events.length} 条事件（${sec}s 前开始 · server 还在跑）──`;
             $messages.appendChild(sep);
-            setBusy(true); // server is still streaming
-            showToast(`已恢复进行中的对话`, 'ok', 2500);
+            setBusy(!m.activeTurn.done);
+            showToast(m.activeTurn.done ? '已恢复（已完成）' : '已恢复进行中的对话', 'ok', 2500);
+          } else {
+            // Safety: clear any stale busy state from before disconnect.
+            setBusy(false);
           }
           loadSessions();
           loadRecentCwds();
@@ -836,19 +868,95 @@
   // ─── prompt / interrupt ───────────────────────────────────────
   function sendPrompt() {
     const text = $input.value.trim();
-    if (!text || busy || !ws || ws.readyState !== 1) return;
-    appendUser(text);
-    sendWS({ type: 'prompt', text });
+    if (!text && pendingImages.length === 0) return;
+    if (busy || !ws || ws.readyState !== 1) return;
+    const imgs = pendingImages.slice();
+    appendUser(text, imgs);
+    sendWS({ type: 'prompt', text, images: imgs.length ? imgs : undefined });
     $input.value = '';
+    pendingImages = [];
+    renderChips();
     autoResize();
     setBusy(true);
 
-    // apply pending label (if user just created a fresh session with a name,
-    // we wait for the first turn_done to apply the label since session_id arrives)
     if (pendingLabel) {
       pendingLabelApplyOnSessionInit();
     }
   }
+
+  // ─── image attach ─────────────────────────────────────────────
+  function fileToBase64(file) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => {
+        const result = String(r.result || '');
+        const base64 = result.split(',')[1] || '';
+        resolve(base64);
+      };
+      r.onerror = () => reject(r.error);
+      r.readAsDataURL(file);
+    });
+  }
+
+  function renderChips() {
+    $chips.innerHTML = '';
+    pendingImages.forEach((img, i) => {
+      const chip = document.createElement('div');
+      chip.className = 'attach-chip';
+      const thumb = document.createElement('img');
+      thumb.src = `data:${img.mediaType};base64,${img.data}`;
+      thumb.alt = img.name || 'image';
+      const name = document.createElement('span');
+      name.className = 'name';
+      const baseName = (img.name || 'image').replace(/\.[^.]+$/, '');
+      name.textContent = baseName.slice(0, 14);
+      const x = document.createElement('button');
+      x.type = 'button';
+      x.className = 'remove';
+      x.textContent = '✕';
+      x.addEventListener('click', () => {
+        pendingImages.splice(i, 1);
+        renderChips();
+      });
+      chip.appendChild(thumb);
+      chip.appendChild(name);
+      chip.appendChild(x);
+      $chips.appendChild(chip);
+    });
+    // Refresh send button enable state
+    $send.disabled = busy || (!$input.value.trim() && pendingImages.length === 0);
+  }
+
+  $attachBtn.addEventListener('click', () => $filePicker.click());
+
+  $filePicker.addEventListener('change', async (e) => {
+    const target = e.target;
+    const files = target && target.files ? Array.from(target.files) : [];
+    for (const f of files) {
+      if (!f.type.startsWith('image/')) {
+        showToast(`${f.name} 不是图片`, 'error');
+        continue;
+      }
+      if (f.size > 5 * 1024 * 1024) {
+        showToast(`${f.name} 太大 (>5MB)`, 'error');
+        continue;
+      }
+      if (pendingImages.length >= 4) {
+        showToast('最多 4 张图', 'error');
+        break;
+      }
+      try {
+        const data = await fileToBase64(f);
+        const mediaType = (f.type === 'image/jpg' ? 'image/jpeg' : f.type);
+        pendingImages.push({ data, mediaType, name: f.name });
+      } catch (err) {
+        log('error', 'image read fail: ' + (err && err.message || err));
+        showToast(`读取 ${f.name} 失败`, 'error');
+      }
+    }
+    renderChips();
+    if (target) target.value = '';
+  });
 
   function pendingLabelApplyOnSessionInit() {
     const name = pendingLabel;
@@ -875,7 +983,7 @@
   function autoResize() {
     $input.style.height = 'auto';
     $input.style.height = Math.min($input.scrollHeight, window.innerHeight * 0.38) + 'px';
-    $send.disabled = busy || !$input.value.trim();
+    $send.disabled = busy || (!$input.value.trim() && pendingImages.length === 0);
   }
 
   // ─── voice STT ────────────────────────────────────────────────
@@ -1049,8 +1157,49 @@
   $newModal.addEventListener('click', (e) => { if (e.target === $newModal) $newModal.classList.remove('open'); });
   $renameModal.addEventListener('click', (e) => { if (e.target === $renameModal) $renameModal.classList.remove('open'); });
 
-  // pause TTS when tab hidden
-  document.addEventListener('visibilitychange', () => { if (document.hidden) stopSpeak(); });
+  // On Android Chrome backgrounded PWAs the JS context is frequently frozen
+  // and the WebSocket dies — but onclose may not fire (or its reconnect
+  // setTimeout doesn't run) until the page becomes visible again. So on
+  // visibility-resume we ALWAYS check ws health and force a reconnect.
+  let lastHiddenAt = 0;
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      lastHiddenAt = Date.now();
+      stopSpeak();
+      log('info', 'page hidden');
+    } else {
+      const awaySec = Math.round((Date.now() - lastHiddenAt) / 1000);
+      log('info', `page visible (away ${awaySec}s, ws.readyState=${ws ? ws.readyState : 'null'})`);
+      if (!ws || ws.readyState !== 1 /* OPEN */) {
+        log('warn', 'ws not open on resume — force reconnect');
+        try { ws && ws.close(); } catch {}
+        ws = null;
+        reconnectAttempts = 0;
+        connect();
+      }
+    }
+  });
+
+  // Same idea on pageshow — covers iOS-style bfcache restores too.
+  window.addEventListener('pageshow', (e) => {
+    if (e.persisted) {
+      log('info', 'pageshow from bfcache, force reconnect');
+      try { ws && ws.close(); } catch {}
+      ws = null;
+      reconnectAttempts = 0;
+      connect();
+    }
+  });
+  // Network coming back online → also reconnect.
+  window.addEventListener('online', () => {
+    log('info', 'navigator online, force reconnect');
+    if (!ws || ws.readyState !== 1) {
+      try { ws && ws.close(); } catch {}
+      ws = null;
+      reconnectAttempts = 0;
+      connect();
+    }
+  });
 
   // ─── boot ─────────────────────────────────────────────────────
   if (!TOKEN) {

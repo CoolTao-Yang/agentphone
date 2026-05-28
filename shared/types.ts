@@ -4,10 +4,18 @@
 // WebSocket: client → server
 // ────────────────────────────────────────────────────────────────
 export type ClientMessage =
-  | { type: 'prompt'; text: string }
+  | { type: 'prompt'; text: string; images?: ImageAttachment[] }
   | { type: 'interrupt' }
   | { type: 'select_session'; sessionId: string | null; cwd?: string }
   | { type: 'tool_response'; toolUseId: string; decision: 'allow' | 'deny'; allowRestOfTurn?: boolean };
+
+// Base64 image data — `data` is the bare base64 (no "data:..." prefix).
+export type ImageAttachment = {
+  mediaType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif';
+  data: string;
+  // Optional: original filename, used only in history/preview.
+  name?: string;
+};
 
 // ────────────────────────────────────────────────────────────────
 // WebSocket: server → client
@@ -57,6 +65,7 @@ export type ActiveTurnState = {
   turnId: string;
   startedAt: number;
   events: AgentEvent[]; // includes tool_request entries; pending = tool_request not yet followed by tool_decision
+  done: boolean;        // true if the turn has already finished and the buffer is being kept around for replay
 };
 
 export type RecentCwdsResponse = { cwds: string[] };

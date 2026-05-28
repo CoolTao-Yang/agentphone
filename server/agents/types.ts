@@ -10,6 +10,7 @@
 
 import type {
   AgentEvent,
+  ImageAttachment,
   SessionSummary,
   SessionMessagesResponse,
 } from '../../shared/types.ts';
@@ -27,6 +28,7 @@ export type CanUseToolResult =
 
 export type StartTurnOptions = {
   prompt: string;
+  images?: ImageAttachment[];
   cwd: string;
   sessionId: string | null;
   canUseTool: CanUseToolFn;

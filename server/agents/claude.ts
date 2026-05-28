@@ -123,8 +123,32 @@ export class ClaudeAgent implements Agent {
       } as unknown as PermissionResult;
     };
 
+    // If there are image attachments, build a multimodal SDKUserMessage and
+    // hand it as an AsyncIterable. Otherwise pass the prompt string directly
+    // (simpler and lets the SDK do its own message wrapping).
+    let promptArg: any = opts.prompt;
+    if (opts.images && opts.images.length > 0) {
+      const images = opts.images;
+      const text = opts.prompt;
+      promptArg = (async function* () {
+        yield {
+          type: 'user',
+          message: {
+            role: 'user',
+            content: [
+              { type: 'text', text },
+              ...images.map((img) => ({
+                type: 'image',
+                source: { type: 'base64', media_type: img.mediaType, data: img.data },
+              })),
+            ],
+          },
+        } as any;
+      })();
+    }
+
     const q: Query = query({
-      prompt: opts.prompt,
+      prompt: promptArg,
       options: {
         cwd: opts.cwd,
         ...(opts.sessionId ? { resume: opts.sessionId } : {}),

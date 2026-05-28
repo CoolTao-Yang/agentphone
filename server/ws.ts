@@ -148,6 +148,7 @@ function createHandler(c: any, cfg: Cfg) {
         try {
           r.start({
             prompt: msg.text,
+            images: msg.images,
             cwd: currentCwd || cfg.DEFAULT_CWD,
             sessionId: currentSessionId,
           });

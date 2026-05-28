@@ -379,8 +379,66 @@ footer {
   border-top: 1px solid var(--border);
   background: var(--bg);
   padding: 9px 11px calc(9px + env(safe-area-inset-bottom));
-  display: flex; align-items: flex-end; gap: 7px;
+  display: flex; flex-direction: column; gap: 6px;
   position: sticky; bottom: 0;
+}
+.composer-row {
+  display: flex; align-items: flex-end; gap: 7px;
+}
+
+.attach-chips {
+  display: none;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.attach-chips:not(:empty) { display: flex; }
+.attach-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 4px 3px 3px;
+  font-size: 11px;
+  font-family: var(--mono);
+  color: var(--text);
+  max-width: 180px;
+}
+.attach-chip img {
+  width: 28px; height: 28px;
+  object-fit: cover;
+  border-radius: 3px;
+  flex: 0 0 auto;
+}
+.attach-chip .name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.attach-chip .remove {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 0 3px;
+  -webkit-tap-highlight-color: transparent;
+}
+.attach-chip .remove:hover { color: var(--error); }
+
+.msg-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.msg-img-thumb {
+  max-width: 200px;
+  max-height: 200px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
 }
 .composer-input {
   flex: 1 1 auto;
