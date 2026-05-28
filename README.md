@@ -1,45 +1,68 @@
 # agentphone
 
-Drive [Claude Code](https://claude.com/claude-code) from your phone over Tailscale.
+> Drive your local coding agent from your phone — over Tailscale, end‑to‑end encrypted, no public exposure.
 
-A small Node + TypeScript server that runs alongside your Claude Code CLI on a
-desktop / WSL host and exposes a mobile‑first PWA. The phone connects through
-Tailscale (no public exposure) and gets:
+`agentphone` is a tiny Node + TypeScript server that runs alongside your
+local coding agent (Claude Code today; Codex / Cursor are wired into the
+same interface) and exposes a mobile‑first PWA. The phone connects via
+Tailscale and gets a full chat UI with streaming, tool approval, voice
+I/O, image attachments and seamless reconnect.
 
-- token‑level streaming markdown rendering (no waiting for the whole reply)
-- in‑line **approve / deny** for tool calls, with an "approve rest of turn" shortcut
-- multi‑session management — see every Claude session on this machine across
-  every project, label them, jump between them
-- Web Speech voice input + output (Chinese / English STT, system TTS)
-- token‑gated WebSocket auth; URL bookmarked on phone
-
-## How it works
+Repository → <https://github.com/CoolTao-Yang/agentphone>
 
 ```
-[phone PWA]
-    │  WebSocket   (token in URL ?token=…)
-    ▼
-[Node + Hono server]
-    ├── /               static PWA shell
-    ├── /ws             chat stream (assistant deltas + tool round‑trip)
-    ├── /api/sessions   list / label / delete sessions across all cwds
-    └── /api/recent-cwds  cwd suggestions when creating a new session
-       │
-       └── @anthropic-ai/claude-agent-sdk
-              · includePartialMessages: true   (token streaming)
-              · canUseTool: callback           (approval round‑trip)
-              · cwd: per‑session              (multi‑project switch)
+┌─────────────────────────────┐         ┌──────────────────────────────┐
+│  phone   (Chrome PWA)       │         │  desktop / WSL  (Node + Hono)│
+│                             │         │                              │
+│  /launch  →  ?token=…       │ ─ WSS ──┤  /ws            chat stream  │
+│                             │ ─ REST ─┤  /api/sessions  list/label   │
+│  add to home screen         │ ─ REST ─┤  /api/sessions/:id/messages  │
+│  ⚡ ⚙ 🔈 ☰ 🎤 📷 ↑          │         │  /api/recent-cwds            │
+└─────────────────────────────┘         │     │                        │
+              ▲                          │     ▼                        │
+              │ Tailscale tunnel         │  TurnRunner (replay buffer)  │
+              │ (no port forwards)       │     │                        │
+              ▼                          │     ▼                        │
+       ────────────────                  │  Agent interface             │
+        100.x.x.x:8765                   │   └── ClaudeAgent (SDK)      │
+                                         │       Codex / Cursor (TODO)  │
+                                         └──────────────────────────────┘
 ```
 
-Tailscale provides the encrypted device‑to‑device tunnel. The server binds on
-`0.0.0.0:8765`; phone reaches it via the host's Tailscale IP. No port forwards
-on the home router and no public HTTPS cert needed (until you want microphone
-access — see below).
+## Why
 
-## Install + run
+You're at your desk all day with Claude Code in a terminal. The moment
+you step away — kitchen, commute, gym, sofa with the laptop closed —
+you lose your agent. Phone Claude apps don't see your repo, your
+sessions, your shell. SSH on a phone keyboard is miserable. agentphone
+is the bridge: same agent, same sessions, same cwd, but driven from
+the device in your pocket with proper UI for streaming text, code
+blocks, tool calls, images and voice.
+
+## Features
+
+| | |
+|---|---|
+| 📱 token‑level streaming | every assistant chunk renders as it arrives (no waiting for full reply) |
+| 🔧 inline tool approval | each tool call gets an approve / deny card; "本轮全 approve" for that tool name |
+| ⚡ auto mode | one tap to bypass approvals entirely (mirrors desktop yolo / acceptEdits) |
+| 🚀 max effort default | every turn ships with `effort: 'max'`; override per-machine via env |
+| 📚 global session manager | drawer shows every Claude session across every cwd, labelable, deletable |
+| 🔄 history replay | tap a session → last 30 messages auto‑load + auto‑scroll to bottom |
+| 🖼️ image attachments | up to 4 images per prompt; multimodal Claude inputs |
+| 🎤 voice input | Web Speech STT (zh-CN default) with visible diagnostics on failure |
+| 🔊 voice output | Web Speech TTS — toggle per session |
+| 🔁 reconnect-resilient | phone backgrounds / network drops don't kill the in-flight turn; replay on reconnect |
+| 🪞 multi-device sync | same session opened on phone + iPad sees the same live stream |
+| 🌐 multi-account | drives `~/.claude-accounts/<name>/` setups; auto-picks `cmax` if present |
+| 🔑 stable bookmark | `/launch` always 302s to current token — bookmark once, never refresh |
+| 🌑 PWA installable | manifest + SW + maskable icon → Add to Home Screen looks like a native app |
+| 📋 remote phone log | every client log line lands at `/tmp/agentphone-phone.log` for tail-based debugging |
+
+## Quick start
 
 ```bash
-git clone https://github.com/<you>/agentphone.git
+git clone https://github.com/CoolTao-Yang/agentphone.git
 cd agentphone
 npm install
 npm start
@@ -48,93 +71,83 @@ npm start
 The server prints two URLs:
 
 ```
+═══════════════════════════════════════════════════
+📱  agentphone server on :8765
+📂  default cwd:    /home/yzt/test/agentphone
+🤖  claude account: cmax (auto-detected)
+🔑  token:          a8c4f97d92e0b1c4 (persisted)
+
 Bookmark this on your phone (Chrome → Add to Home Screen).
 It auto-redirects with the current token so it never goes stale:
    http://100.119.115.75:8765/launch
 
 First-time / shareable direct link:
    http://100.119.115.75:8765/?token=a8c4f97d92e0b1c4
+═══════════════════════════════════════════════════
 ```
 
-**Bookmark `/launch` once and you're done forever** — it always 302s to
-`/?token=<current>`. Even if the token rotates, the bookmark keeps working.
-
-The token itself is persisted on first generation to
-`~/.config/agentphone/env` (chmod 600), so restarts don't change it
-either. The two layers stack: stable token + stable bookmark URL.
-
-To "install" as an app on the phone: Chrome menu → **Add to Home Screen**.
-Manifest + service worker are in place, so it becomes a standalone icon.
+Make sure Tailscale is running on both desktop and phone with the same
+account. Open `/launch` in phone Chrome → Chrome menu → **Add to Home
+Screen**. You now have an icon that opens the chat UI directly.
 
 ## Configuration
 
 Environment variables (read on startup):
 
-| var                 | default            | meaning                                       |
-| ------------------- | ------------------ | --------------------------------------------- |
-| `PORT`              | `8765`             | TCP port to listen on                         |
-| `HOST`              | `0.0.0.0`          | bind address                                  |
-| `PHONE_AGENT_TOKEN` | random 16‑char hex | URL token required to connect                 |
-| `PHONE_AGENT_CWD`   | `process.cwd()`    | default working directory for new sessions    |
-| `CLAUDE_CONFIG_DIR` | unset → `~/.claude/` | which Claude account to drive (see below)  |
+| var                 | default                    | meaning                                                  |
+| ------------------- | -------------------------- | -------------------------------------------------------- |
+| `PORT`              | `8765`                     | TCP port to listen on                                    |
+| `HOST`              | `0.0.0.0`                  | bind address                                             |
+| `PHONE_AGENT_TOKEN` | random 16-char hex (persisted) | URL token required to connect                        |
+| `PHONE_AGENT_CWD`   | `process.cwd()`            | default working directory for new sessions               |
+| `CLAUDE_CONFIG_DIR` | auto-detect from `~/.claude-accounts/` | which Claude account agentphone drives (see below) |
+
+The token persists to `~/.config/agentphone/env` (`chmod 600`) on first
+generation, so restarts reuse it — combined with `/launch`, the phone
+bookmark never goes stale.
 
 ### Multi-account Claude setups
 
-If you run multiple Claude accounts isolated via `CLAUDE_CONFIG_DIR` (e.g.,
-`~/.claude-accounts/<name>/`), set it before starting:
+If you run multiple Claude accounts isolated via `CLAUDE_CONFIG_DIR`
+(e.g. `~/.claude-accounts/cmax/`), agentphone auto-detects them on
+startup, preferring `cmax` if present. To pin a specific account:
 
 ```bash
-CLAUDE_CONFIG_DIR=~/.claude-accounts/cmax npm start
+CLAUDE_CONFIG_DIR=~/.claude-accounts/cpro1 npm start
 ```
 
-The server prints which account it's driving at startup, and the phone PWA
-shows a small badge next to the brand:
+The active account name shows as a chip in the PWA header. Sessions
+are typically shared across accounts via `~/.claude-shared/projects/`,
+so the drawer lists every session regardless of which account is
+active. The account choice mainly affects usage billing and which
+`.claude.json` / plugin set the agent loads.
 
-```
-agent​phone  [cmax]   · /home/yzt/test/foo
-```
+## HTTPS (required for microphone)
 
-Sessions are usually shared across accounts via `~/.claude-shared/projects/`,
-so the drawer lists everything regardless of which account is active. The
-account choice mostly affects usage billing and which `.claude.json` /
-plugin set the agent loads.
+Android Chrome (94+) requires a secure context for the Web Speech API.
+Without it, the mic button will silently abort. To enable HTTPS via
+Tailscale:
 
-When installed via `install-autostart.sh`, the env file at
-`~/.config/agentphone/env` auto-defaults to the first account it finds
-under `~/.claude-accounts/` (prefers `cmax` if present).
-
-Pin a token (so the bookmark stays stable across restarts):
-
-```bash
-PHONE_AGENT_TOKEN=my-secret-token npm start
-```
-
-## HTTPS (required for microphone on Android Chrome)
-
-Web Speech API requires a secure context. On the host, run:
-
-```bash
+```powershell
+# Windows PowerShell (host where Tailscale is installed)
 tailscale serve --bg https / http://localhost:8765
 ```
 
 Tailscale prints a `https://<host>.<tailnet>.ts.net/` URL with a real
-Let's Encrypt cert. Use that URL on the phone instead of the raw IP.
+Let's Encrypt cert. Use that on the phone instead of the raw IP.
 
-Older Tailscale versions: `tailscale serve --bg --https=443 http://localhost:8765`.
+If you see *HTTPS not enabled for tailnet* — Tailscale admin console →
+DNS → toggle "Enable HTTPS".
 
-If you see *HTTPS not enabled for tailnet* — go to the Tailscale admin
-console → DNS → enable HTTPS.
-
-## Auto‑start (WSL / Linux)
+## Auto-start (WSL / Linux)
 
 ```bash
 ./scripts/install-autostart.sh
 ```
 
 Installs a systemd **user** unit that:
-
 - starts at boot via `loginctl enable-linger`
-- reads `~/.config/agentphone/env` for `PHONE_AGENT_TOKEN` + `PORT`
+- reads `~/.config/agentphone/env` (token, port, `CLAUDE_CONFIG_DIR`)
 - restarts on crash
 
 Manage with:
@@ -146,39 +159,73 @@ systemctl --user disable  agentphone
 journalctl --user -u agentphone -f
 ```
 
-> WSL note: the unit needs systemd enabled in WSL (`[boot] systemd=true` in
-> `/etc/wsl.conf`, then `wsl --shutdown` from PowerShell once).
+> WSL needs systemd enabled (`[boot] systemd=true` in `/etc/wsl.conf`,
+> then `wsl --shutdown` from PowerShell once).
 
-## Sessions
+## Phone UI
 
-Sessions are persisted by Claude itself at
-`~/.claude/projects/<encoded-cwd>/<uuid>.jsonl`. agentphone only adds a
-sidecar of user‑provided **labels** at `~/.config/agentphone/labels.json`:
-
-```json
-{
-  "90ec5d61-38e7-4da1-b2cc-51d500b0eeb1": { "name": "改 main.ts" }
-}
+```
+┌─────────────────────────────────────────────────┐
+│ ☰  agent​phone  cmax  · cwd     ●  ⚡  🔈  ⚙   │  header
+├─────────────────────────────────────────────────┤
+│                                                 │
+│  你 ▶ 帮我看一下 main.ts                        │
+│                                                 │
+│  claude ◆                                       │  one header
+│  好——我先打开它…                              │  per turn,
+│                                                 │  multiple
+│  ┌──────────────────────────────────────────┐   │  blocks stack
+│  │ 🔧 Read main.ts                          │   │  beneath
+│  │ ▾ approve / ✗ deny    [本轮全 approve]   │   │
+│  └──────────────────────────────────────────┘   │  ← tool card
+│                                                 │
+│  claude ◆                                       │
+│  这个文件做了三件事…                            │
+│                                                 │
+│ ────── done · 2.1s · 8 turns · $0.003 ──────── │
+├─────────────────────────────────────────────────┤
+│ 🎤  📷  [问 claude…]                       ↑    │  composer
+└─────────────────────────────────────────────────┘
 ```
 
-The PWA drawer (☰) lists every session across every cwd, with timestamp,
-turn count, and a one‑line preview lifted from the first user message.
+| button | meaning |
+|---|---|
+| ☰ | sessions drawer (list / new / rename / delete) |
+| ⚡ | toggle auto mode — tool calls auto-approve |
+| 🔈 → 🔊 | toggle TTS — read assistant replies aloud |
+| ⚙ | toggle debug overlay (shows ws state, errors) |
+| ↻ | (in drawer) reset to a new session |
+| 🎤 | start STT — speak into input |
+| 📷 | attach images — camera or gallery, up to 4 |
+| ↑ | send (also Enter; Shift+Enter for newline) |
+| ■ | interrupt the running turn |
 
 ## Architecture choices
 
-- **TypeScript on both sides.** Server and browser share `shared/types.ts`,
-  so the WebSocket protocol has a single source of truth. Matches the
-  language of Claude Code itself.
-- **No frontend build.** Single static dir — vanilla JS, no Vite. `marked` +
-  `highlight.js` from CDN; the service worker caches them after first load
-  so subsequent opens are instant and work offline (the WebSocket of
-  course still needs network).
-- **No backend persistence beyond labels.** Sessions live where Claude
-  already puts them; we don't duplicate that storage.
-- **Tool approval round‑trips through WebSocket.** The SDK's `canUseTool`
-  callback blocks until the phone sends `tool_response`. There's an
-  "approve rest of turn for this tool name" escape hatch for chatty
-  sessions.
+- **TypeScript on both sides.** Shared `shared/types.ts` — the WS
+  protocol has one source of truth, no client/server drift.
+- **No frontend build step.** Single static dir, vanilla JS, marked +
+  highlight.js from CDN, service worker caches the shell so subsequent
+  opens are instant.
+- **Agent abstraction.** `server/agents/types.ts` defines a small
+  interface (`startTurn`, `listSessions`, `getSessionMessages`, …).
+  `ClaudeAgent` implements it via `@anthropic-ai/claude-agent-sdk`;
+  adding Codex/Cursor is a single new file in `server/agents/` plus
+  one line in `registry.ts`.
+- **`TurnRunner` decouples turn lifetime from WS lifetime.** The
+  agent keeps running on the desktop even if the phone backgrounds —
+  events flow into an in-memory buffer keyed to the current turn.
+  Reconnects replay the buffer in `connected.activeTurn.events`.
+- **Storage = whatever the agent already uses.** Claude Code already
+  writes session jsonl to `~/.claude(-shared)/projects/<encoded-cwd>/`;
+  agentphone reads those directly. Only user-supplied labels live in
+  a small sidecar at `~/.config/agentphone/labels.json`.
+- **Tool approval round-trips through WS.** SDK's `canUseTool`
+  callback awaits the phone's `tool_response`. When `⚡ auto mode` is
+  on, approvals are skipped server-side.
+- **Stable bookmark.** Token persists to disk; `/launch` 302s to the
+  current token. Phone bookmarks the launch URL once; rotations don't
+  break it.
 
 ## Layout
 
@@ -189,20 +236,48 @@ turn count, and a one‑line preview lifted from the first user message.
 ├── shared/
 │   └── types.ts                  protocol shared between server + browser
 ├── server/
-│   ├── main.ts                   entry, route mounting, listener
-│   ├── sessions.ts               REST: list / label / delete / recent‑cwds
-│   └── ws.ts                     WebSocket handler + agent runner
+│   ├── main.ts                   entry; token resolution; banner
+│   ├── runner.ts                 TurnRunner (decoupled turn + replay buffer)
+│   ├── ws.ts                     WebSocket handler + settings
+│   ├── sessions.ts               REST: list / label / delete / messages / cwds
+│   └── agents/
+│       ├── types.ts              Agent interface (kind-agnostic)
+│       ├── registry.ts           wire in concrete agents here
+│       └── claude.ts             Claude Code SDK driver
 ├── static/
 │   ├── index.html                PWA shell
-│   ├── app.js                    client app (chat, sessions, voice)
+│   ├── app.js                    client (chat, sessions, voice, images)
 │   ├── style.css
 │   ├── manifest.webmanifest
-│   ├── sw.js                     service worker (caches shell)
-│   └── icon.svg
+│   ├── sw.js                     service worker (shell cache)
+│   └── icon.svg                  maskable PWA icon
 └── scripts/
     ├── agentphone.service.template
     └── install-autostart.sh
 ```
+
+## Roadmap
+
+Concrete next steps, roughly priority-ordered:
+
+1. **CodexAgent** — pty-wrap the Codex CLI to satisfy the existing
+   `Agent` interface. About a day of work; the runner and UI need
+   zero changes.
+2. **Effort selector in UI** — header chip lets you flip between
+   low/medium/high/max per session.
+3. **Image rendering in history replay** — currently the
+   `/api/sessions/:id/messages` endpoint strips images; preserve and
+   render thumbnails.
+4. **Notifications on long-running turn completion** — Web Push
+   when the phone is backgrounded and a turn ends.
+5. **Multi-turn-parallel** — TurnRunner is currently a singleton;
+   support N runners keyed by session so two prompts can run at once.
+6. **Server-side persistence of in-flight buffer** — survive a
+   server crash mid-turn (today the in-memory buffer is lost on
+   restart; Claude's own jsonl still has the canonical record).
+7. **Capacitor APK wrap** — only when PWA hits a real limit
+   (background tasks, share intents from other apps, lockscreen
+   control); PWA does ~90% of the "feels like an app" today.
 
 ## License
 
