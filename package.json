@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch server/main.ts",
-    "start": "tsx server/main.ts"
+    "start": "tsx server/main.ts",
+    "kill": "pkill -KILL -f 'tsx.*server/main\\.ts' 2>/dev/null; sleep 1; ss -tlnp 2>/dev/null | grep -q ':8765 ' && echo '❌ still in use' || echo '✓ port 8765 free'"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "latest",
