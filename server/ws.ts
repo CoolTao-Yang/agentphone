@@ -327,13 +327,16 @@ function createHandler(c: any, cfg: Cfg) {
           send({ type: 'error', message: '这个 session 已经有一个回合在进行了，切换或等待' });
           return;
         }
-        // Block prompts on externally-driven sessions unless user took over.
+        // Block prompts only when the external driver is currently THINKING
+        // (busy). When it's idle, the CLI isn't racing for the next turn so
+        // we let the phone send freely. The user already saw the dot in the
+        // drawer so they know another end exists.
         const ext = externalStatusFor(myCurrentSessionId);
-        if (ext && myTakeoverSid !== myCurrentSessionId) {
-          console.log(`[ws] prompt rejected: follow-mode (external pid=${ext.pid} account=${ext.account})`);
+        if (ext && ext.status === 'busy' && myTakeoverSid !== myCurrentSessionId) {
+          console.log(`[ws] prompt rejected: follow-mode busy (external pid=${ext.pid} account=${ext.account})`);
           send({
             type: 'error',
-            message: `这个 session 正在被 ${ext.account} 的 CLI 驱动，先点"接管"再发送`,
+            message: `${ext.account} 的 CLI 正在思考，等它结束或点"接管"`,
           });
           return;
         }

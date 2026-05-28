@@ -219,7 +219,7 @@
       lastEventAt = Date.now();
       armBusyWatchdog();
     } else if (followBlocked) {
-      setStatus('connected', '👀 follow mode');
+      setStatus('connected', '👀 CLI 思考中');
     } else {
       setStatus(ws && ws.readyState === 1 ? 'connected' : '', ws && ws.readyState === 1 ? '已连接' : '断开');
       if (busyWatchdog) { clearTimeout(busyWatchdog); busyWatchdog = null; }
@@ -227,10 +227,11 @@
   }
 
   // True when the current session is being driven by another claude.exe AND
-  // the user hasn't pressed 接管 yet. While true, prompt input is disabled
-  // and a banner explains why.
+  // that driver is currently BUSY AND the user hasn't pressed 接管 yet.
+  // When the driver is idle we let the user send freely — the CLI isn't
+  // about to race us for the next turn.
   function isFollowBlocked() {
-    return !!currentExternal && !followModeTakenOver;
+    return !!currentExternal && currentExternal.status === 'busy' && !followModeTakenOver;
   }
 
   function startFollowRefresh() {
@@ -263,20 +264,30 @@
       setBusy(busy);                // recompute send-button enablement
       return;
     }
-    // External driver present → start (or keep) live history polling.
-    startFollowRefresh();
     const ext = currentExternal;
-    const verb = ext.status === 'busy' ? '正在思考' : '正在连接';
-    if (!followModeTakenOver) {
-      $input.placeholder = `🔒 ${ext.account} CLI ${verb}，点接管才能发送`;
-      const html = `👀 <b>follow mode</b> — <code>${ext.account}</code> 的 ${ext.kind} CLI (<code>pid ${ext.pid}</code>) ${verb}此 session。 ` +
+    // The history poll runs whenever any external driver is attached, but
+    // only does network when the driver is BUSY — when idle the jsonl
+    // isn't changing and re-polling is just waste.
+    if (ext.status === 'busy') startFollowRefresh();
+    else stopFollowRefresh();
+
+    if (ext.status === 'busy' && !followModeTakenOver) {
+      $input.placeholder = `🔒 ${ext.account} CLI 正在思考，点接管才能发送`;
+      const html = `👀 <b>follow mode</b> — <code>${ext.account}</code> 的 ${ext.kind} CLI (<code>pid ${ext.pid}</code>) 正在思考此 session。 ` +
                    `你能看实时更新，但发送已禁用。` +
                    ` <button type="button" class="follow-takeover" data-sid="${currentSessionId || ''}">接管</button>`;
       addFollowBanner(html);
-    } else {
+    } else if (ext.status === 'busy' && followModeTakenOver) {
       $input.placeholder = `⚠ 已接管 — 双方驱动可能冲突`;
       const html = `⚠ <b>已接管</b> — 注意 <code>${ext.account}</code> CLI 也在用此 session，双方写同一份 jsonl 可能冲突。`;
       addFollowBanner(html);
+    } else {
+      // ext.status === 'idle' — driver attached but not racing right now.
+      // Quiet UI: no banner, normal placeholder. Subtle "● live" in the
+      // drawer + the status pill remain so the user knows there's another
+      // owner of this session.
+      $input.placeholder = '问 claude… (CLI 端 idle · 共享 session)';
+      followModeTakenOver = false;  // takeover expires on idle
     }
     setBusy(busy);
   }
@@ -1196,6 +1207,13 @@
       // For silent re-renders we replace the existing content so the user
       // sees fresh history; otherwise the original behaviour (append only)
       // stays for first-load.
+      // Capture scroll state BEFORE clearing so we can restore it after the
+      // re-render (silent path only — first-load wants bottom).
+      const prevScrollTop    = $messages.scrollTop;
+      const prevScrollHeight = $messages.scrollHeight;
+      const prevClientHeight = $messages.clientHeight;
+      const wasAtBottom =
+        (prevScrollHeight - prevScrollTop - prevClientHeight) < 80;
       if (silent) clearMessages();
       if (placeholder) placeholder.remove();
 
@@ -1219,26 +1237,38 @@
         }
       }
 
-      const sep = document.createElement('div');
-      sep.className = 'history-sep';
-      const moreNote = data.total > msgs.length
-        ? `（共 ${data.total} 条，已加载最近 ${msgs.length}）`
-        : '';
-      sep.textContent = `── 历史 ${msgs.length} 条${moreNote} · 新消息从下面开始 ──`;
-      $messages.appendChild(sep);
-      // After loading history, force scroll to bottom regardless of where
-      // the user was (autoScroll's near-bottom heuristic doesn't help here
-      // because the content height just exploded).
+      // Don't add the "新消息从下面开始" separator on silent re-renders —
+      // it would land mid-thread on every poll.
+      if (!silent) {
+        const sep = document.createElement('div');
+        sep.className = 'history-sep';
+        const moreNote = data.total > msgs.length
+          ? `（共 ${data.total} 条，已加载最近 ${msgs.length}）`
+          : '';
+        sep.textContent = `── 历史 ${msgs.length} 条${moreNote} · 新消息从下面开始 ──`;
+        $messages.appendChild(sep);
+      }
+      // Scroll behaviour:
+      //   First-load (silent=false): force bottom — content height just
+      //     exploded, the user can't possibly want to see where they "were".
+      //   Silent re-render (follow-mode polling): preserve the user's
+      //     scroll. If they were near the bottom we keep them at the new
+      //     bottom (so live updates stay visible); otherwise we restore
+      //     their distance-from-top so reading a few screens up isn't
+      //     yanked every 4s.
       requestAnimationFrame(() => {
-        $messages.scrollTop = $messages.scrollHeight;
-        // double-tap on the next frame in case images haven't laid out yet
-        requestAnimationFrame(() => {
+        if (!silent || wasAtBottom) {
           $messages.scrollTop = $messages.scrollHeight;
-        });
+          requestAnimationFrame(() => { $messages.scrollTop = $messages.scrollHeight; });
+        } else {
+          $messages.scrollTop = prevScrollTop;
+        }
       });
     } catch (e) {
-      placeholder.textContent = '── 加载历史出错: ' + (e.message || e) + ' ──';
-      placeholder.classList.add('err');
+      if (placeholder) {
+        placeholder.textContent = '── 加载历史出错: ' + (e.message || e) + ' ──';
+        placeholder.classList.add('err');
+      }
       log('error', 'history fetch: ' + (e.message || e));
     }
   }
