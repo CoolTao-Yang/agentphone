@@ -599,23 +599,45 @@
   }
 
   function connect() {
+    // Forcibly close any previous socket BEFORE creating a new one. Without
+    // this the previous WS' onmessage handler stays alive and processes
+    // events in parallel with the new connection — each event ends up
+    // rendered N times where N is the number of leaked sockets. Common
+    // trigger: backgrounding the phone fires visibilitychange→reconnect
+    // before the OS-killed socket fired onclose.
+    if (ws) {
+      try {
+        ws.onopen = null; ws.onmessage = null;
+        ws.onclose = null; ws.onerror = null;
+        ws.close();
+      } catch (e) {}
+      ws = null;
+    }
+
     setStatus('', '连接中');
     log('info', 'ws connecting');
+    let myWs;
     try {
-      ws = new WebSocket(WS_URL);
+      myWs = new WebSocket(WS_URL);
     } catch (e) {
       setStatus('error', '无法连接');
       log('error', 'ws ctor: ' + (e && e.message || e));
       return;
     }
+    ws = myWs;
 
-    ws.onopen = () => {
+    // Each handler bails if it's been replaced — belt-and-suspenders.
+    const stale = () => myWs !== ws;
+
+    myWs.onopen = () => {
+      if (stale()) return;
       reconnectAttempts = 0;
       setStatus('connected', '已连接');
       log('ok', 'ws open');
     };
 
-    ws.onmessage = (ev) => {
+    myWs.onmessage = (ev) => {
+      if (stale()) return;
       let m;
       try { m = JSON.parse(ev.data); } catch { return; }
       switch (m.type) {
@@ -680,7 +702,8 @@
       }
     };
 
-    ws.onclose = (ev) => {
+    myWs.onclose = (ev) => {
+      if (stale()) return;
       if (ev.code === 4001) { setStatus('error', '未授权'); return; }
       setStatus('error', '断开,重连中');
       setBusy(false);
@@ -688,8 +711,9 @@
       const wait = Math.min(8000, 500 * (1 + reconnectAttempts++));
       setTimeout(connect, wait);
     };
-    ws.onerror = () => {
-      log('error', `ws error (readyState=${ws ? ws.readyState : 'null'} online=${navigator.onLine})`);
+    myWs.onerror = () => {
+      if (stale()) return;
+      log('error', `ws error (readyState=${myWs.readyState} online=${navigator.onLine})`);
     };
   }
 
