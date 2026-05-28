@@ -16,9 +16,16 @@
 
 import { appendFile, stat, writeFile } from 'node:fs/promises';
 import type { Hono } from 'hono';
-import type { AgentSettings, ClientMessage, ServerMessage } from '../shared/types.ts';
+import type { AgentSettings, ClientMessage, ExternalSessionStatus, ServerMessage } from '../shared/types.ts';
 import { TurnRunner } from './runner.ts';
 import { defaultAgent, ownerOfSession } from './agents/registry.ts';
+import { externalSessions } from './external-sessions.ts';
+
+function externalStatusFor(sessionId: string | null): ExternalSessionStatus | null {
+  if (!sessionId) return null;
+  const e = externalSessions.get(sessionId);
+  return e ? { pid: e.pid, account: e.account, kind: e.kind, status: e.status } : null;
+}
 
 // Module-level settings shared across WS connections. Phone toggles update
 // this; new prompts use the latest values.
@@ -105,6 +112,11 @@ function createHandler(c: any, cfg: Cfg) {
   let myCurrentCwd: string = initialCwd || cfg.DEFAULT_CWD;
   let myUnsubscribe: (() => void) | null = null;
   let myRunner: TurnRunner | null = null;
+  // User explicitly accepted the risk of double-driving the currently-
+  // selected session (e.g. desktop CLI is also on it). Resets every time
+  // the session changes.
+  let myTakeoverSid: string | null = null;
+  let myExternalUnsubscribe: (() => void) | null = null;
 
   const send = (msg: ServerMessage) => { if (ws) ws.send(JSON.stringify(msg)); };
 
@@ -138,7 +150,7 @@ function createHandler(c: any, cfg: Cfg) {
         if (r === pendingRunner) adoptPendingAsSession(newSid, r);
         if (!myCurrentSessionId) {
           myCurrentSessionId = newSid;
-          send({ type: 'session_set', sessionId: newSid, cwd: myCurrentCwd });
+          send({ type: 'session_set', sessionId: newSid, cwd: myCurrentCwd, external: externalStatusFor(newSid) });
         }
       }
       switch (emit.kind) {
@@ -161,14 +173,29 @@ function createHandler(c: any, cfg: Cfg) {
     onOpen(_evt: any, w: WSLike) {
       ws = w;
       if (!tokenOk) {
+        console.log('[ws] connection rejected: bad token');
         send({ type: 'unauthorized' });
         w.close(4001, 'unauthorized');
         return;
       }
+      console.log(`[ws] open sessionId=${myCurrentSessionId ?? 'new'} cwd=${myCurrentCwd}`);
       startHeartbeat();
 
       const r = getRunnerForSession(myCurrentSessionId);
       subscribeToRunner(r);
+
+      // Watch external-session status so we can push live changes.
+      if (myExternalUnsubscribe) myExternalUnsubscribe();
+      myExternalUnsubscribe = externalSessions.onChange((sid, info) => {
+        // Push every change so drawer/UI sync; client filters by sessionId.
+        send({
+          type: 'external_status',
+          sessionId: sid,
+          external: info
+            ? { pid: info.pid, account: info.account, kind: info.kind, status: info.status }
+            : null,
+        });
+      });
 
       send({
         type: 'connected',
@@ -178,6 +205,7 @@ function createHandler(c: any, cfg: Cfg) {
         claudeAccount: deriveAccountName(),
         activeTurn: r.activeState(),
         settings: agentSettings,
+        external: externalStatusFor(myCurrentSessionId),
       });
     },
 
@@ -197,6 +225,8 @@ function createHandler(c: any, cfg: Cfg) {
         // sub to the new one. Coming back later replays via activeTurn.
         myCurrentSessionId = msg.sessionId;
         if (msg.cwd) myCurrentCwd = msg.cwd;
+        // Switching sessions clears any takeover acknowledgment.
+        myTakeoverSid = null;
 
         const newRunner = getRunnerForSession(myCurrentSessionId);
         if (msg.sessionId) {
@@ -209,13 +239,12 @@ function createHandler(c: any, cfg: Cfg) {
           type: 'session_set',
           sessionId: myCurrentSessionId,
           cwd: myCurrentCwd,
+          external: externalStatusFor(myCurrentSessionId),
         });
         // Also re-send connected-style state so the client picks up the
         // new active turn (if any) and renders correctly.
         const state = newRunner.activeState();
         if (state) {
-          // Convey via a synthetic 'connected' so the client's existing
-          // replay logic kicks in.
           send({
             type: 'connected',
             defaultCwd: cfg.DEFAULT_CWD,
@@ -224,7 +253,18 @@ function createHandler(c: any, cfg: Cfg) {
             claudeAccount: deriveAccountName(),
             activeTurn: state,
             settings: agentSettings,
+            external: externalStatusFor(myCurrentSessionId),
           });
+        }
+        return;
+      }
+
+      if (msg.type === 'takeover') {
+        // User acknowledged the risk of double-driving. Allow prompts again
+        // for THIS session id until they switch away.
+        if (msg.sessionId === myCurrentSessionId) {
+          myTakeoverSid = msg.sessionId;
+          console.log(`[ws] takeover accepted for sessionId=${msg.sessionId}`);
         }
         return;
       }
@@ -271,13 +311,30 @@ function createHandler(c: any, cfg: Cfg) {
       }
 
       if (msg.type === 'prompt') {
+        const preview = (msg.text || '').slice(0, 80).replace(/\s+/g, ' ');
+        console.log(
+          `[ws] prompt sessionId=${myCurrentSessionId ?? 'new'} cwd=${myCurrentCwd} ` +
+          `imgs=${msg.images?.length ?? 0} text="${preview}${(msg.text||'').length>80?'...':''}"`,
+        );
         const r = myRunner;
         if (!r) {
+          console.log('[ws] prompt rejected: no runner attached');
           send({ type: 'error', message: 'no runner attached' });
           return;
         }
         if (r.isActive()) {
+          console.log('[ws] prompt rejected: runner already busy');
           send({ type: 'error', message: '这个 session 已经有一个回合在进行了，切换或等待' });
+          return;
+        }
+        // Block prompts on externally-driven sessions unless user took over.
+        const ext = externalStatusFor(myCurrentSessionId);
+        if (ext && myTakeoverSid !== myCurrentSessionId) {
+          console.log(`[ws] prompt rejected: follow-mode (external pid=${ext.pid} account=${ext.account})`);
+          send({
+            type: 'error',
+            message: `这个 session 正在被 ${ext.account} 的 CLI 驱动，先点"接管"再发送`,
+          });
           return;
         }
         const totalImageBytes = (msg.images ?? []).reduce(
@@ -306,9 +363,11 @@ function createHandler(c: any, cfg: Cfg) {
     },
 
     onClose() {
+      console.log(`[ws] close sessionId=${myCurrentSessionId ?? 'new'}`);
       // CRITICAL: do NOT interrupt any runner — they keep running so the
       // next reconnect can replay.
       if (myUnsubscribe) { myUnsubscribe(); myUnsubscribe = null; }
+      if (myExternalUnsubscribe) { myExternalUnsubscribe(); myExternalUnsubscribe = null; }
       stopHeartbeat();
       ws = null;
     },

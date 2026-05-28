@@ -9,6 +9,7 @@ import { createNodeWebSocket } from '@hono/node-ws';
 import { Hono } from 'hono';
 import { mountWebSocket } from './ws.ts';
 import { mountSessionApi } from './sessions.ts';
+import { externalSessions } from './external-sessions.ts';
 
 // Token resolution order:
 //   1. PHONE_AGENT_TOKEN env var (caller overrides everything)
@@ -110,6 +111,10 @@ app.use('/api/*', async (c, next) => {
   }
   return next();
 });
+
+// Start tracking external (CLI / cmax / bg) claude.exe processes so the WS
+// can flag sessions as "another end is driving this".
+externalSessions.start();
 
 mountSessionApi(app, TOKEN);
 mountWebSocket(app, upgradeWebSocket, { TOKEN, DEFAULT_CWD });

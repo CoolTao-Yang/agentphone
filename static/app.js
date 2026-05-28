@@ -79,6 +79,9 @@
   let lastRenderedSeq = -1;    // max seq we've already applied to the DOM for that turn
   let lastEventAt = 0;         // wall-clock of most recent agent_event while busy=true
   let busyWatchdog = null;     // setTimeout handle
+  /** @type {{pid:number,account:string,kind:string,status:'idle'|'busy'} | null} */
+  let currentExternal = null;  // external (CLI/bg) status of currentSessionId
+  let followModeTakenOver = false; // user clicked 接管 — temporarily allow send
   /** @type {Array<{ data: string, mediaType: string, name?: string }>} */
   let pendingImages = [];
   /** @type {{ autoApproveTools: boolean, effort: string }} */
@@ -202,17 +205,76 @@
   }
   function setBusy(b) {
     busy = b;
-    $send.disabled = busy || (!$input.value.trim() && pendingImages.length === 0);
+    const followBlocked = isFollowBlocked();
+    $send.disabled = busy || followBlocked || (!$input.value.trim() && pendingImages.length === 0);
     $stop.classList.toggle('hidden', !busy);
     $send.classList.toggle('hidden', busy);
     if (busy) {
       setStatus('busy', '思考中');
       lastEventAt = Date.now();
       armBusyWatchdog();
+    } else if (followBlocked) {
+      setStatus('connected', '👀 follow mode');
     } else {
       setStatus(ws && ws.readyState === 1 ? 'connected' : '', ws && ws.readyState === 1 ? '已连接' : '断开');
       if (busyWatchdog) { clearTimeout(busyWatchdog); busyWatchdog = null; }
     }
+  }
+
+  // True when the current session is being driven by another claude.exe AND
+  // the user hasn't pressed 接管 yet. While true, prompt input is disabled
+  // and a banner explains why.
+  function isFollowBlocked() {
+    return !!currentExternal && !followModeTakenOver;
+  }
+
+  /** Reflect currentExternal into UI: banner + send-button gate + input hint. */
+  function applyFollowMode() {
+    // Remove previous follow-mode banner (we always re-render — easier than diffing).
+    if ($bannerRow) {
+      const old = $bannerRow.querySelector('.banner.follow-mode');
+      if (old) old.remove();
+    }
+    if (!currentExternal) {
+      $input.placeholder = '问 claude…';
+      followModeTakenOver = false;  // belt + suspenders
+      setBusy(busy);                // recompute send-button enablement
+      return;
+    }
+    const ext = currentExternal;
+    const verb = ext.status === 'busy' ? '正在思考' : '正在连接';
+    if (!followModeTakenOver) {
+      $input.placeholder = `🔒 ${ext.account} CLI ${verb}，点接管才能发送`;
+      const html = `👀 <b>follow mode</b> — <code>${ext.account}</code> 的 ${ext.kind} CLI (<code>pid ${ext.pid}</code>) ${verb}此 session。 ` +
+                   `你能看实时更新，但发送已禁用。` +
+                   ` <button type="button" class="follow-takeover" data-sid="${currentSessionId || ''}">接管</button>`;
+      addFollowBanner(html);
+    } else {
+      $input.placeholder = `⚠ 已接管 — 双方驱动可能冲突`;
+      const html = `⚠ <b>已接管</b> — 注意 <code>${ext.account}</code> CLI 也在用此 session，双方写同一份 jsonl 可能冲突。`;
+      addFollowBanner(html);
+    }
+    setBusy(busy);
+  }
+
+  function addFollowBanner(html) {
+    if (!$bannerRow) return;
+    const b = document.createElement('div');
+    b.className = 'banner warn follow-mode';
+    b.innerHTML = html + ' <button class="x" type="button" aria-label="dismiss">✕</button>';
+    b.querySelector('.x').addEventListener('click', () => b.remove());
+    const takeoverBtn = b.querySelector('.follow-takeover');
+    if (takeoverBtn) {
+      takeoverBtn.addEventListener('click', () => {
+        const sid = takeoverBtn.dataset.sid;
+        if (!sid) return;
+        followModeTakenOver = true;
+        sendWS({ type: 'takeover', sessionId: sid });
+        showToast('已接管 · 可发送，但注意冲突', 'warn', 2500);
+        applyFollowMode();
+      });
+    }
+    $bannerRow.appendChild(b);
   }
 
   // If busy for 90s with no incoming agent_event the agent is likely stuck
@@ -764,8 +826,16 @@
 
     myWs.onmessage = (ev) => {
       if (stale()) return;
+      // Any byte from server counts as proof-of-life — keeps watchdog quiet.
+      lastServerActivityAt = Date.now();
       let m;
       try { m = JSON.parse(ev.data); } catch { return; }
+      // Reply to server heartbeat ping immediately so it doesn't close us
+      // with code 4002 after PONG_TIMEOUT_MS (60s).
+      if (m.type === 'ping') {
+        try { ws && ws.readyState === 1 && ws.send(JSON.stringify({ type: 'pong', ts: m.ts })); } catch {}
+        return;
+      }
       switch (m.type) {
         case 'connected':
           defaultCwd = m.defaultCwd;
@@ -812,14 +882,45 @@
             // Safety: clear any stale busy state from before disconnect.
             setBusy(false);
           }
+          // External-driver status for current session (drives follow-mode UI).
+          currentExternal = m.external || null;
+          followModeTakenOver = false;  // fresh connect clears takeover
+          applyFollowMode();
           loadSessions();
           loadRecentCwds();
           break;
         case 'session_set':
           currentSessionId = m.sessionId;
           setCwdDisplay(m.cwd);
+          currentExternal = m.external || null;
+          followModeTakenOver = false;
+          applyFollowMode();
           log('info', 'session set ' + (m.sessionId ? m.sessionId.slice(0,8) : '(new)') + ' cwd=' + m.cwd);
           break;
+        case 'external_status': {
+          // Update the drawer entry without a full refetch.
+          for (const s of allSessions) {
+            if (s.sessionId === m.sessionId) {
+              s.external = m.external;
+              break;
+            }
+          }
+          applySessionFilter();   // re-render with new dot
+          // If it's the CURRENTLY selected session, also flip our banner.
+          if (m.sessionId === currentSessionId) {
+            const wasBusy = currentExternal?.status === 'busy';
+            const isBusy = m.external?.status === 'busy';
+            currentExternal = m.external;
+            // If CLI just finished a turn (busy→idle), refresh history so we
+            // see what it produced.
+            if (wasBusy && !isBusy && currentSessionId) {
+              clearMessages();
+              fetchAndRenderHistory(currentSessionId).catch(() => {});
+            }
+            applyFollowMode();
+          }
+          break;
+        }
         case 'agent_event':
           lastEventAt = Date.now();
           if (m.turnId && m.turnId !== lastTurnId) {
@@ -934,7 +1035,12 @@
     $sessionList.innerHTML = '';
     for (const s of sessions) {
       const div = document.createElement('div');
-      div.className = 'session-item' + (s.sessionId === currentSessionId ? ' active' : '') + (s.running ? ' running' : '');
+      const extBusy = s.external?.status === 'busy';
+      const extIdle = s.external?.status === 'idle';
+      div.className = 'session-item'
+        + (s.sessionId === currentSessionId ? ' active' : '')
+        + (s.running ? ' running' : '')
+        + (extBusy ? ' ext-busy' : extIdle ? ' ext-idle' : '');
       div.dataset.sid = s.sessionId;
       div.dataset.cwd = s.cwd;
 
@@ -946,6 +1052,13 @@
       badge.className = `agent-badge agent-${agent}`;
       badge.textContent = agent;
       name.appendChild(badge);
+      if (s.external) {
+        const extDot = document.createElement('span');
+        extDot.className = 'ext-dot ext-dot-' + s.external.status;
+        extDot.title = `${s.external.account} CLI · ${s.external.status}`;
+        extDot.textContent = s.external.status === 'busy' ? '● thinking' : '● live';
+        name.appendChild(extDot);
+      }
 
       const cwd = document.createElement('div');
       cwd.className = 'si-cwd';

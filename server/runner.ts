@@ -207,6 +207,11 @@ export class TurnRunner {
         this.record({ kind: 'turn_done' });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
+        const stack = err instanceof Error ? err.stack : '';
+        console.error(
+          `[runner] turn ${turn.turnId} failed after ${Math.round((Date.now() - this.startedAtMs) / 1000)}s ` +
+          `(sessionId=${opts.sessionId ?? 'new'}, cwd=${opts.cwd}): ${msg}\n${stack}`
+        );
         this.record({ kind: 'error', message: msg });
       } finally {
         this.active = null;

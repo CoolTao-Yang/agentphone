@@ -10,6 +10,7 @@ import type { Hono, Context } from 'hono';
 import type { SessionMessagesResponse, SessionSummary } from '../shared/types.ts';
 import { agents, ownerOfSession } from './agents/registry.ts';
 import { activeSessionIds } from './ws.ts';
+import { externalSessions } from './external-sessions.ts';
 
 const CONFIG_DIR  = join(homedir(), '.config', 'agentphone');
 const LABELS_PATH = join(CONFIG_DIR, 'labels.json');
@@ -38,12 +39,18 @@ export async function listAllSessions(): Promise<SessionSummary[]> {
     for (const s of sessions) {
       s.name = labels[s.sessionId]?.name ?? null;
       if (running.has(s.sessionId)) s.running = true;
+      const ext = externalSessions.get(s.sessionId);
+      if (ext) {
+        s.external = { pid: ext.pid, account: ext.account, kind: ext.kind, status: ext.status };
+      }
       all.push(s);
     }
   }
   return all.sort((a, b) => {
-    // Running sessions float to top
-    if (!!a.running !== !!b.running) return a.running ? -1 : 1;
+    // Active (any kind) float to top: external busy > our running > external idle > everything else.
+    const aActive = !!a.running || a.external?.status === 'busy';
+    const bActive = !!b.running || b.external?.status === 'busy';
+    if (aActive !== bActive) return aActive ? -1 : 1;
     return b.lastUsed - a.lastUsed;
   });
 }

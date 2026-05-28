@@ -10,7 +10,11 @@ export type ClientMessage =
   | { type: 'tool_response'; toolUseId: string; decision: 'allow' | 'deny'; allowRestOfTurn?: boolean }
   | { type: 'set_settings'; autoApproveTools?: boolean; effort?: EffortLevel; perToolAuto?: Record<string, boolean> }
   | { type: 'log'; level: 'info' | 'warn' | 'error' | 'ok'; message: string; ts?: number }
-  | { type: 'pong'; ts: number };
+  | { type: 'pong'; ts: number }
+  // Acknowledge that the user is OK driving a session that another end
+  // (CLI / bg job) is also driving. Until takeover is sent, the server tells
+  // the client `followMode:true` and rejects prompts.
+  | { type: 'takeover'; sessionId: string };
 
 export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
@@ -42,14 +46,30 @@ export type ServerMessage =
       claudeAccount: string;
       activeTurn: ActiveTurnState | null;
       settings: AgentSettings;
+      // Whether the currently-selected session is being driven by an external
+      // claude.exe (e.g. desktop CLI). When true, the client should render the
+      // follow-mode banner and disable prompt input until the user accepts
+      // the risk and sends a `takeover` message.
+      external: ExternalSessionStatus | null;
     }
   | { type: 'settings'; settings: AgentSettings }
   | { type: 'ping'; ts: number }
   | { type: 'unauthorized' }
-  | { type: 'session_set'; sessionId: string | null; cwd: string }
+  | { type: 'session_set'; sessionId: string | null; cwd: string; external: ExternalSessionStatus | null }
   | { type: 'agent_event'; turnId: string; seq: number; event: AgentEvent }
   | { type: 'turn_done' }
-  | { type: 'error'; message: string };
+  | { type: 'error'; message: string }
+  // Status of an externally-driven session changed (busy↔idle, or appeared/
+  // disappeared). The client uses this to flip the drawer dot and the header
+  // banner without polling.
+  | { type: 'external_status'; sessionId: string; external: ExternalSessionStatus | null };
+
+export type ExternalSessionStatus = {
+  pid: number;
+  account: string;       // 'cmax' | 'cpro1' | …
+  kind: string;          // 'interactive' | 'bg' | …
+  status: 'idle' | 'busy';
+};
 
 // Normalized agent events. Server flattens SDK messages to these so the
 // frontend never has to look at raw Anthropic Beta event shapes.
@@ -78,6 +98,10 @@ export type SessionSummary = {
   /** True if there is currently an active (in-flight) turn on this session
    *  — drawer renders a small pulse indicator. */
   running?: boolean;
+  /** Set when the session is being driven by an external claude.exe (CLI,
+   *  bg job, …). Drawer renders a 🟢 dot; selecting the session enters
+   *  follow-mode. */
+  external?: ExternalSessionStatus | null;
 };
 
 export type SeqEvent = {
