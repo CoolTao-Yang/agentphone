@@ -932,3 +932,99 @@ footer {
 .debug .l-warn  { color: var(--warn); }
 .debug .l-error { color: var(--error); }
 .debug .l-ok    { color: var(--ok); }
+
+
+/* Inline action buttons inside .banner */
+.banner-act {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 4px;
+  padding: 1px 8px;
+  margin: 0 0 0 6px;
+  font-size: 11.5px;
+  font-family: var(--mono);
+  cursor: pointer;
+}
+.banner-act:active { transform: scale(0.94); }
+
+
+/* Multi-turn: pulse marker on sessions with an in-flight turn */
+.session-item.running .si-name::before {
+  content: '●';
+  color: var(--accent-2);
+  margin-right: 5px;
+  font-size: 9px;
+  vertical-align: 2px;
+  animation: pulse-dot 1.2s ease-in-out infinite;
+  display: inline-block;
+}
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.4; transform: scale(0.8); }
+}
+
+
+/* APK bootstrap (first-launch server URL setup) */
+.bootstrap {
+  max-width: 480px;
+  margin: 60px auto;
+  padding: 24px;
+  text-align: center;
+  font-family: var(--sans);
+  color: var(--text);
+}
+.bootstrap h1 {
+  font-family: var(--mono);
+  font-size: 28px;
+  font-weight: 600;
+  margin: 0 0 6px;
+  letter-spacing: 0.02em;
+}
+.bootstrap h1 .hl { color: var(--accent-2); }
+.bootstrap .lead {
+  color: var(--muted);
+  margin: 0 0 24px;
+  font-size: 14px;
+}
+.bootstrap input[type="url"] {
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 16px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  margin: 12px 0;
+  outline: none;
+  -webkit-text-size-adjust: 100%;
+}
+.bootstrap input[type="url"]:focus { border-color: var(--accent); }
+.bootstrap button {
+  background: var(--accent);
+  color: #1a0f00;
+  border: none;
+  padding: 12px 28px;
+  border-radius: 8px;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: var(--sans);
+  margin: 8px 0 0;
+}
+.bootstrap button:active { transform: scale(0.96); }
+.bootstrap .hint {
+  font-size: 12.5px;
+  color: var(--muted);
+  margin-top: 24px;
+  line-height: 1.7;
+}
+.bootstrap .hint code {
+  font-family: var(--mono);
+  background: var(--surface-2);
+  padding: 1px 6px;
+  border-radius: 3px;
+  color: var(--accent-2);
+  font-size: 11.5px;
+}

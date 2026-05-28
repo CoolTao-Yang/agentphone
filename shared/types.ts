@@ -75,6 +75,9 @@ export type SessionSummary = {
   lastUsed: number; // unix ms
   turns: number;
   agent: 'claude' | 'codex' | 'cursor';
+  /** True if there is currently an active (in-flight) turn on this session
+   *  — drawer renders a small pulse indicator. */
+  running?: boolean;
 };
 
 export type SeqEvent = {

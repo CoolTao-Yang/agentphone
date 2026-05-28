@@ -31,9 +31,62 @@
     }
   </script>
 
+  <!-- APK bootstrap: in Capacitor, redirect to user-configured server URL
+       (or show setup form on first launch). Browser PWA falls through. -->
+  <script>
+  (function () {
+    // Capacitor sets window.Capacitor; cordova sets window.cordova.
+    var inCapacitor = !!(window.Capacitor || window.cordova);
+    var KEY = 'agentphone:serverUrl';
+    if (!inCapacitor) return;
+    var stored = localStorage.getItem(KEY);
+    if (stored) {
+      var u = String(stored).replace(/\/+$/, '');
+      location.replace(u + '/launch');
+      return;
+    }
+    // Hide main app and show bootstrap form once DOM is ready.
+    document.addEventListener('DOMContentLoaded', function () {
+      var bs = document.getElementById('bootstrap');
+      var app = document.getElementById('app');
+      if (bs) bs.style.display = 'block';
+      if (app) app.style.display = 'none';
+      var input = document.getElementById('bs-url');
+      var go = document.getElementById('bs-go');
+      if (go) go.addEventListener('click', function () {
+        var v = (input && input.value || '').trim();
+        if (!v) { return; }
+        if (!/^https?:\/\//i.test(v)) v = 'http://' + v;
+        v = v.replace(/\/+$/, '');
+        try { localStorage.setItem(KEY, v); } catch (e) {}
+        location.replace(v + '/launch');
+      });
+      if (input) input.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' && go) go.click();
+      });
+    });
+  })();
+  </script>
+
   <script src="app.js" defer></script>
 </head>
 <body>
+  <!-- Bootstrap form, only shown inside Capacitor APK on first launch -->
+  <section id="bootstrap" class="bootstrap" style="display:none">
+    <h1>agent<span class="hl">phone</span></h1>
+    <p class="lead">第一次打开，需要告诉它你 desktop server 的地址</p>
+    <input id="bs-url" type="url" autocomplete="off" autocapitalize="off"
+           spellcheck="false" placeholder="http://100.119.115.75:8765">
+    <button id="bs-go" type="button">连接</button>
+    <p class="hint">
+      通常是 <code>http://&lt;Tailscale IP&gt;:8765</code><br>
+      或 <code>https://&lt;host&gt;.&lt;tailnet&gt;.ts.net</code>（开了 tailscale serve 后）
+    </p>
+    <p class="hint" style="opacity:.7">
+      可以以后改：长按 APK 图标 → app info → clear storage 重置。
+    </p>
+  </section>
+
   <div id="app">
     <header>
       <button class="h-btn" id="open-drawer" title="sessions" aria-label="打开 session 列表">☰</button>

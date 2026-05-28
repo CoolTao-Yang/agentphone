@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import type { Hono, Context } from 'hono';
 import type { SessionMessagesResponse, SessionSummary } from '../shared/types.ts';
 import { agents, ownerOfSession } from './agents/registry.ts';
+import { activeSessionIds } from './ws.ts';
 
 const CONFIG_DIR  = join(homedir(), '.config', 'agentphone');
 const LABELS_PATH = join(CONFIG_DIR, 'labels.json');
@@ -30,15 +31,21 @@ async function writeLabels(labels: Labels): Promise<void> {
 
 export async function listAllSessions(): Promise<SessionSummary[]> {
   const labels = await readLabels();
+  const running = activeSessionIds();
   const all: SessionSummary[] = [];
   for (const a of agents) {
     const sessions = await a.listSessions();
     for (const s of sessions) {
       s.name = labels[s.sessionId]?.name ?? null;
+      if (running.has(s.sessionId)) s.running = true;
       all.push(s);
     }
   }
-  return all.sort((a, b) => b.lastUsed - a.lastUsed);
+  return all.sort((a, b) => {
+    // Running sessions float to top
+    if (!!a.running !== !!b.running) return a.running ? -1 : 1;
+    return b.lastUsed - a.lastUsed;
+  });
 }
 
 export async function setSessionLabel(sessionId: string, name: string | null): Promise<void> {

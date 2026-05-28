@@ -16,7 +16,12 @@
   const URL_PARAMS = new URL(location.href).searchParams;
   const TOKEN = URL_PARAMS.get('token') || '';
   const WS_PROTO = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const WS_URL = `${WS_PROTO}//${location.host}/ws?token=${encodeURIComponent(TOKEN)}`;
+  function buildWsUrl() {
+    let u = `${WS_PROTO}//${location.host}/ws?token=${encodeURIComponent(TOKEN)}`;
+    if (currentSessionId) u += '&session=' + encodeURIComponent(currentSessionId);
+    if (currentCwd)       u += '&cwd=' + encodeURIComponent(currentCwd);
+    return u;
+  }
 
   // ─── DOM refs ─────────────────────────────────────────────────
   const $messages   = document.getElementById('messages');
@@ -72,6 +77,8 @@
   let renamingSessionId = null;
   let lastTurnId = null;       // server-assigned turn id of the most recent agent_event we rendered
   let lastRenderedSeq = -1;    // max seq we've already applied to the DOM for that turn
+  let lastEventAt = 0;         // wall-clock of most recent agent_event while busy=true
+  let busyWatchdog = null;     // setTimeout handle
   /** @type {Array<{ data: string, mediaType: string, name?: string }>} */
   let pendingImages = [];
   /** @type {{ autoApproveTools: boolean, effort: string }} */
@@ -198,8 +205,46 @@
     $send.disabled = busy || (!$input.value.trim() && pendingImages.length === 0);
     $stop.classList.toggle('hidden', !busy);
     $send.classList.toggle('hidden', busy);
-    if (busy) setStatus('busy', '思考中');
-    else if (ws && ws.readyState === 1) setStatus('connected', '已连接');
+    if (busy) {
+      setStatus('busy', '思考中');
+      lastEventAt = Date.now();
+      armBusyWatchdog();
+    } else {
+      setStatus(ws && ws.readyState === 1 ? 'connected' : '', ws && ws.readyState === 1 ? '已连接' : '断开');
+      if (busyWatchdog) { clearTimeout(busyWatchdog); busyWatchdog = null; }
+    }
+  }
+
+  // If busy for 90s with no incoming agent_event the agent is likely stuck
+  // (or our WS heartbeat fix already reconnected but no events came). Offer
+  // the user a "force-clear" button instead of staring at 思考中 forever.
+  function armBusyWatchdog() {
+    if (busyWatchdog) clearTimeout(busyWatchdog);
+    busyWatchdog = setTimeout(() => {
+      if (!busy) return;
+      const silentSec = Math.round((Date.now() - lastEventAt) / 1000);
+      if (silentSec < 90) { armBusyWatchdog(); return; }  // events came in between
+      log('warn', `busy watchdog: ${silentSec}s without events`);
+      if (typeof addBanner === 'function') {
+        // Drop a one-shot banner with two actions
+        const html = `⚠ 「思考中」已持续 ${silentSec}s 没新动静。` +
+                     `<button class="banner-act" id="bw-reset">强制清除</button>` +
+                     `<button class="banner-act" id="bw-interrupt">让 server 打断</button>`;
+        addBanner('warn', html);
+        const reset = document.getElementById('bw-reset');
+        const intr  = document.getElementById('bw-interrupt');
+        if (reset) reset.addEventListener('click', () => {
+          setBusy(false);
+          showToast('已强制清除 busy', 'ok', 1800);
+          const b = reset.closest('.banner'); if (b) b.remove();
+        });
+        if (intr) intr.addEventListener('click', () => {
+          sendWS({ type: 'interrupt' });
+          showToast('已发送 interrupt', 'ok', 1800);
+          const b = intr.closest('.banner'); if (b) b.remove();
+        });
+      }
+    }, 91_000);
   }
 
   function autoScroll() {
@@ -639,7 +684,7 @@
     log('info', 'ws connecting (reason=' + (reason || 'initial') + ')');
     let myWs;
     try {
-      myWs = new WebSocket(WS_URL);
+      myWs = new WebSocket(buildWsUrl());
     } catch (e) {
       setStatus('error', '无法连接');
       log('error', 'ws ctor: ' + (e && e.message || e));
@@ -716,6 +761,7 @@
           log('info', 'session set ' + (m.sessionId ? m.sessionId.slice(0,8) : '(new)') + ' cwd=' + m.cwd);
           break;
         case 'agent_event':
+          lastEventAt = Date.now();
           if (m.turnId && m.turnId !== lastTurnId) {
             // Server started a new turn since we last rendered — reset.
             lastTurnId = m.turnId;
@@ -824,7 +870,7 @@
     $sessionList.innerHTML = '';
     for (const s of sessions) {
       const div = document.createElement('div');
-      div.className = 'session-item' + (s.sessionId === currentSessionId ? ' active' : '');
+      div.className = 'session-item' + (s.sessionId === currentSessionId ? ' active' : '') + (s.running ? ' running' : '');
       div.dataset.sid = s.sessionId;
       div.dataset.cwd = s.cwd;
 

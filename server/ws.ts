@@ -1,62 +1,79 @@
-// WebSocket layer — thin adapter between WS connections and the singleton
-// TurnRunner. The runner is module-level so that closing a WS does not
-// terminate the in-flight turn; on reconnect, we replay the buffered events
-// from the runner and re-attach.
+// WebSocket layer — adapter between WS connections and per-session TurnRunners.
 //
-// Session state (currentSessionId, currentCwd) is also module-level —
-// all WS clients see the same logical "phone agent session". For now this is
-// single-tenant by design (one user, one home machine).
+// Architecture (v6 multi-turn):
+//   - `runners` is a Map<sessionId, TurnRunner>. Each session has its own
+//     runner instance that survives WS disconnects (replay buffer kept).
+//   - `pendingRunner` holds the runner used by clients that haven't picked
+//     a session yet (sessionId === null). When the first session_init
+//     fires for that runner, we adopt it into `runners` under its real id.
+//   - Each WS handler has its OWN currentSessionId/Cwd (no module-level
+//     shared "focus"). Multi-device sync still works: if two devices both
+//     point at session X, they both subscribe to runners.get(X) and see
+//     the same stream.
+//   - select_session NEVER interrupts. Switching away from a running turn
+//     just unsubscribes the WS from that runner; the agent keeps going on
+//     the desktop. Coming back later replays the buffer.
 
-import { appendFile, stat, truncate, writeFile } from 'node:fs/promises';
+import { appendFile, stat, writeFile } from 'node:fs/promises';
 import type { Hono } from 'hono';
 import type { AgentSettings, ClientMessage, ServerMessage } from '../shared/types.ts';
 import { TurnRunner } from './runner.ts';
 import { defaultAgent, ownerOfSession } from './agents/registry.ts';
 
 // Module-level settings shared across WS connections. Phone toggles update
-// this; new prompts use the latest values. Defaults match desktop usage:
-//   - effort 'max' (matches CLAUDE_EFFORT=max we see on this user's shell)
-//   - autoApproveTools false (safe default — phone explicitly enables)
+// this; new prompts use the latest values.
 let agentSettings: AgentSettings = {
   autoApproveTools: false,
   effort: 'max',
   perToolAuto: {},
 };
 
-// Where the phone-side log() output ends up. Tail this for live phone state:
-//   tail -f /tmp/agentphone-phone.log
 const PHONE_LOG_PATH = '/tmp/agentphone-phone.log';
-const PHONE_LOG_MAX_BYTES = 1_000_000; // 1MB hard cap, truncated from the front
-
+const PHONE_LOG_MAX_BYTES = 1_000_000;
 async function appendPhoneLog(line: string): Promise<void> {
   try {
     await appendFile(PHONE_LOG_PATH, line);
     const st = await stat(PHONE_LOG_PATH);
     if (st.size > PHONE_LOG_MAX_BYTES) {
-      // Read tail, write back. Crude but fine at 1MB.
       const fs = await import('node:fs/promises');
       const buf = await fs.readFile(PHONE_LOG_PATH);
       const trimmed = buf.subarray(buf.length - Math.floor(PHONE_LOG_MAX_BYTES / 2));
       await writeFile(PHONE_LOG_PATH, trimmed);
     }
-  } catch {
-    /* logging failures should never crash the server */
-  }
+  } catch { /* logging failures should never crash the server */ }
 }
 
 type WSLike = { send(data: string): void; close(code?: number, reason?: string): void };
 type Cfg = { TOKEN: string; DEFAULT_CWD: string };
 
-// Singleton runner; reused across WS connects.
-let runner: TurnRunner | null = null;
-function getRunner(): TurnRunner {
-  if (!runner) runner = new TurnRunner(defaultAgent());
-  return runner;
+// ── Per-session runner pool ──────────────────────────────────────
+const runners = new Map<string, TurnRunner>();
+let pendingRunner: TurnRunner | null = null;
+
+function getRunnerForSession(sessionId: string | null): TurnRunner {
+  if (sessionId === null) {
+    if (!pendingRunner) pendingRunner = new TurnRunner(defaultAgent());
+    return pendingRunner;
+  }
+  let r = runners.get(sessionId);
+  if (!r) { r = new TurnRunner(defaultAgent()); runners.set(sessionId, r); }
+  return r;
 }
 
-// Shared cross-connection state.
-let currentSessionId: string | null = null;
-let currentCwd: string | null = null;
+function adoptPendingAsSession(sessionId: string, r: TurnRunner): void {
+  if (!runners.has(sessionId)) runners.set(sessionId, r);
+  if (pendingRunner === r) pendingRunner = null;
+}
+
+/** Sessions that currently have an active (running) turn. Used by the
+ *  REST sessions list to render a "running" indicator in the drawer. */
+export function activeSessionIds(): Set<string> {
+  const out = new Set<string>();
+  for (const [sid, r] of runners) {
+    if (r.isActive()) out.add(sid);
+  }
+  return out;
+}
 
 function deriveAccountName(): string {
   const ccd = process.env.CLAUDE_CONFIG_DIR;
@@ -69,16 +86,25 @@ export function mountWebSocket(
   upgradeWebSocket: (handlerFactory: (c: any) => any) => any,
   cfg: Cfg
 ): void {
-  if (currentCwd === null) currentCwd = cfg.DEFAULT_CWD;
   app.get('/ws', upgradeWebSocket((c: any) => createHandler(c, cfg)));
 }
 
 function createHandler(c: any, cfg: Cfg) {
   const tokenOk = c.req.query('token') === cfg.TOKEN;
+  // Reconnect support: client sends its current session id in the URL so
+  // the new handler picks up the right runner and replay buffer.
+  const initialSession = (c.req.query('session') || '').trim() || null;
+  const initialCwd = (c.req.query('cwd') || '').trim() || null;
+
   let ws: WSLike | null = null;
-  let unsubscribe: (() => void) | null = null;
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let lastPongAt = Date.now();
+
+  // ── Per-connection focus state ──────────────────────────────
+  let myCurrentSessionId: string | null = initialSession;
+  let myCurrentCwd: string = initialCwd || cfg.DEFAULT_CWD;
+  let myUnsubscribe: (() => void) | null = null;
+  let myRunner: TurnRunner | null = null;
 
   const send = (msg: ServerMessage) => { if (ws) ws.send(JSON.stringify(msg)); };
 
@@ -90,12 +116,8 @@ function createHandler(c: any, cfg: Cfg) {
     lastPongAt = Date.now();
     heartbeatTimer = setInterval(() => {
       if (!ws) return;
-      const sinceLastPong = Date.now() - lastPongAt;
-      if (sinceLastPong > PONG_TIMEOUT_MS) {
-        // Client is gone / frozen — drop the connection so the client's
-        // reconnect machinery (visibilitychange / online / setTimeout)
-        // can take over with a fresh socket.
-        try { ws.close(4002, 'pong timeout'); } catch { /* ignore */ }
+      if (Date.now() - lastPongAt > PONG_TIMEOUT_MS) {
+        try { ws.close(4002, 'pong timeout'); } catch {}
         return;
       }
       send({ type: 'ping', ts: Date.now() });
@@ -103,6 +125,36 @@ function createHandler(c: any, cfg: Cfg) {
   }
   function stopHeartbeat() {
     if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+  }
+
+  function subscribeToRunner(r: TurnRunner) {
+    if (myUnsubscribe) { myUnsubscribe(); myUnsubscribe = null; }
+    myRunner = r;
+    myUnsubscribe = r.subscribe((emit) => {
+      // When a new session is born inside the pending runner, adopt it under
+      // its real id so subsequent prompts for that sessionId find the runner.
+      if (emit.kind === 'agent_event' && emit.event.kind === 'session_init') {
+        const newSid = emit.event.sessionId;
+        if (r === pendingRunner) adoptPendingAsSession(newSid, r);
+        if (!myCurrentSessionId) {
+          myCurrentSessionId = newSid;
+          send({ type: 'session_set', sessionId: newSid, cwd: myCurrentCwd });
+        }
+      }
+      switch (emit.kind) {
+        case 'agent_event': {
+          const tid = r.turnId() || '';
+          send({ type: 'agent_event', turnId: tid, seq: emit.seq, event: emit.event });
+          return;
+        }
+        case 'turn_done':
+          send({ type: 'turn_done' });
+          return;
+        case 'error':
+          send({ type: 'error', message: emit.message });
+          return;
+      }
+    });
   }
 
   return {
@@ -115,44 +167,17 @@ function createHandler(c: any, cfg: Cfg) {
       }
       startHeartbeat();
 
-      const r = getRunner();
+      const r = getRunnerForSession(myCurrentSessionId);
+      subscribeToRunner(r);
 
       send({
         type: 'connected',
         defaultCwd: cfg.DEFAULT_CWD,
-        currentCwd: currentCwd || cfg.DEFAULT_CWD,
-        currentSessionId,
+        currentCwd: myCurrentCwd,
+        currentSessionId: myCurrentSessionId,
         claudeAccount: deriveAccountName(),
         activeTurn: r.activeState(),
         settings: agentSettings,
-      });
-
-      unsubscribe = r.subscribe((emit) => {
-        // Capture session_id from agent and surface it as session_set so
-        // the phone (and all other attached devices) move to the new id.
-        if (emit.kind === 'agent_event' && emit.event.kind === 'session_init') {
-          if (!currentSessionId) {
-            currentSessionId = emit.event.sessionId;
-            send({
-              type: 'session_set',
-              sessionId: emit.event.sessionId,
-              cwd: currentCwd || cfg.DEFAULT_CWD,
-            });
-          }
-        }
-        switch (emit.kind) {
-          case 'agent_event': {
-            const tid = r.turnId() || '';
-            send({ type: 'agent_event', turnId: tid, seq: emit.seq, event: emit.event });
-            return;
-          }
-          case 'turn_done':
-            send({ type: 'turn_done' });
-            return;
-          case 'error':
-            send({ type: 'error', message: emit.message });
-            return;
-        }
       });
     },
 
@@ -166,35 +191,51 @@ function createHandler(c: any, cfg: Cfg) {
         return;
       }
 
-      const r = getRunner();
-
       if (msg.type === 'select_session') {
-        if (r.isActive()) {
-          try { await r.interrupt(); } catch { /* ignore */ }
-        }
-        currentSessionId = msg.sessionId;
-        if (msg.cwd) currentCwd = msg.cwd;
+        // CRITICAL: never interrupt the previous session's runner — the
+        // agent keeps running on the desktop. We just unsub from it and
+        // sub to the new one. Coming back later replays via activeTurn.
+        myCurrentSessionId = msg.sessionId;
+        if (msg.cwd) myCurrentCwd = msg.cwd;
+
+        const newRunner = getRunnerForSession(myCurrentSessionId);
         if (msg.sessionId) {
           const owner = await ownerOfSession(msg.sessionId);
-          if (owner) r.setAgent(owner);
-        } else {
-          // new session → keep current agent (or could surface explicit choice later)
+          if (owner) newRunner.setAgent(owner);
         }
+        subscribeToRunner(newRunner);
+
         send({
           type: 'session_set',
-          sessionId: currentSessionId,
-          cwd: currentCwd || cfg.DEFAULT_CWD,
+          sessionId: myCurrentSessionId,
+          cwd: myCurrentCwd,
         });
+        // Also re-send connected-style state so the client picks up the
+        // new active turn (if any) and renders correctly.
+        const state = newRunner.activeState();
+        if (state) {
+          // Convey via a synthetic 'connected' so the client's existing
+          // replay logic kicks in.
+          send({
+            type: 'connected',
+            defaultCwd: cfg.DEFAULT_CWD,
+            currentCwd: myCurrentCwd,
+            currentSessionId: myCurrentSessionId,
+            claudeAccount: deriveAccountName(),
+            activeTurn: state,
+            settings: agentSettings,
+          });
+        }
         return;
       }
 
       if (msg.type === 'interrupt') {
-        await r.interrupt();
+        if (myRunner) await myRunner.interrupt();
         return;
       }
 
       if (msg.type === 'tool_response') {
-        r.respondToTool(msg.toolUseId, {
+        if (myRunner) myRunner.respondToTool(msg.toolUseId, {
           allow: msg.decision === 'allow',
           allowRestOfTurn: msg.allowRestOfTurn,
         });
@@ -230,11 +271,15 @@ function createHandler(c: any, cfg: Cfg) {
       }
 
       if (msg.type === 'prompt') {
-        if (r.isActive()) {
-          send({ type: 'error', message: '上一个对话还在进行' });
+        const r = myRunner;
+        if (!r) {
+          send({ type: 'error', message: 'no runner attached' });
           return;
         }
-        // #14: cap total image payload to 20MB (5MB per image × 4 max)
+        if (r.isActive()) {
+          send({ type: 'error', message: '这个 session 已经有一个回合在进行了，切换或等待' });
+          return;
+        }
         const totalImageBytes = (msg.images ?? []).reduce(
           (s, im) => s + Math.ceil((im.data.length * 3) / 4),
           0,
@@ -247,8 +292,8 @@ function createHandler(c: any, cfg: Cfg) {
           r.start({
             prompt: msg.text,
             images: msg.images,
-            cwd: currentCwd || cfg.DEFAULT_CWD,
-            sessionId: currentSessionId,
+            cwd: myCurrentCwd,
+            sessionId: myCurrentSessionId,
             effort: agentSettings.effort,
             autoApproveAllTools: agentSettings.autoApproveTools,
             autoApproveTools: agentSettings.perToolAuto,
@@ -261,9 +306,9 @@ function createHandler(c: any, cfg: Cfg) {
     },
 
     onClose() {
-      // CRITICAL: do NOT interrupt the runner — the turn keeps running so
-      // the next reconnect can replay all events.
-      if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+      // CRITICAL: do NOT interrupt any runner — they keep running so the
+      // next reconnect can replay.
+      if (myUnsubscribe) { myUnsubscribe(); myUnsubscribe = null; }
       stopHeartbeat();
       ws = null;
     },

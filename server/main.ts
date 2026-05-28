@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { spawn } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { networkInterfaces, homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -112,6 +113,93 @@ app.use('/api/*', async (c, next) => {
 
 mountSessionApi(app, TOKEN);
 mountWebSocket(app, upgradeWebSocket, { TOKEN, DEFAULT_CWD });
+
+// ── HTTPS one-click setup ─────────────────────────────────────
+// Lets the phone tell the server "please run `tailscale serve --bg
+// https / http://localhost:<port>` for me so my Web Speech mic
+// permission stops failing". Token-gated like the rest.
+function execCmd(cmd: string, args: string[], timeoutMs = 15_000):
+  Promise<{ ok: boolean; stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    let stdout = ''; let stderr = '';
+    let p: ReturnType<typeof spawn>;
+    try {
+      p = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch (e: any) {
+      resolve({ ok: false, stdout, stderr: e?.message || String(e) });
+      return;
+    }
+    const timer = setTimeout(() => {
+      try { p.kill('SIGTERM'); } catch {}
+      resolve({ ok: false, stdout, stderr: stderr + '\n[timeout after ' + timeoutMs + 'ms]' });
+    }, timeoutMs);
+    p.stdout?.on('data', (d) => { stdout += d.toString(); });
+    p.stderr?.on('data', (d) => { stderr += d.toString(); });
+    p.on('close', (code) => {
+      clearTimeout(timer);
+      resolve({ ok: code === 0, stdout, stderr });
+    });
+    p.on('error', (e) => {
+      clearTimeout(timer);
+      resolve({ ok: false, stdout, stderr: stderr + '\n' + (e?.message || String(e)) });
+    });
+  });
+}
+
+async function findTailscaleBin(): Promise<string | null> {
+  // Try common locations: native WSL/Linux, then Windows-side via /mnt/c.
+  const candidates = [
+    'tailscale',
+    '/mnt/c/Program Files/Tailscale/tailscale.exe',
+    'tailscale.exe',
+  ];
+  for (const cand of candidates) {
+    const r = await execCmd(cand, ['version'], 3_000);
+    if (r.ok) return cand;
+  }
+  return null;
+}
+
+app.post('/api/setup-https', async (c) => {
+  if (c.req.query('token') !== TOKEN && c.req.header('x-token') !== TOKEN) {
+    return c.json({ error: 'unauthorized' }, 401);
+  }
+  const ts = await findTailscaleBin();
+  if (!ts) {
+    return c.json({
+      ok: false,
+      error: 'tailscale binary not found on this host. Run the command manually in PowerShell:\n  tailscale serve --bg https / http://localhost:' + PORT,
+    }, 500);
+  }
+
+  const serveRes = await execCmd(ts, ['serve', '--bg', 'https', '/', `http://localhost:${PORT}`], 12_000);
+  // Even if "serve" exits non-zero (e.g., funnel exists), try status to see what's actually configured.
+  const statusRes = await execCmd(ts, ['status', '--json'], 5_000);
+  if (!statusRes.ok) {
+    return c.json({
+      ok: false,
+      error: 'tailscale status failed: ' + (statusRes.stderr || statusRes.stdout).slice(0, 500),
+      serveStderr: serveRes.stderr.slice(0, 500),
+    });
+  }
+  let dns: string | null = null;
+  try {
+    const j = JSON.parse(statusRes.stdout);
+    dns = (j?.Self?.DNSName || '').replace(/\.$/, '') || null;
+  } catch { /* fall through */ }
+  if (!dns) {
+    return c.json({
+      ok: false,
+      error: 'could not parse tailscale status output to find DNS name',
+      serveStderr: serveRes.stderr.slice(0, 500),
+    });
+  }
+  return c.json({
+    ok: serveRes.ok,
+    url: `https://${dns}/launch`,
+    serveMessage: (serveRes.stdout + '\n' + serveRes.stderr).trim().slice(0, 500),
+  });
+});
 
 // Stable bookmark target — phone bookmarks this single URL forever,
 // and we 302 it to the chat UI with the current token attached.

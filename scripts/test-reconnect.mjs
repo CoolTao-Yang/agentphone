@@ -36,9 +36,10 @@ function awaitMessage(ws, predicate, label, ms = 30_000) {
   ]);
 }
 
-function connect(label) {
+function connect(label, sessionId) {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(URL);
+    const u = sessionId ? URL + '&session=' + encodeURIComponent(sessionId) : URL;
+    const ws = new WebSocket(u);
     const onErr = (e) => reject(new Error(`${label} ws error: ${e.message}`));
     ws.once('open', () => {
       ws.off('error', onErr);
@@ -92,12 +93,14 @@ async function test() {
   }
   console.log(`  ✓ event carries seq=${firstEvt.seq} turnId=${firstEvt.turnId.slice(0,8)}`);
   const firstTurnId = firstEvt.turnId;
+  const sessionIdFromInit = firstEvt.event?.kind === 'session_init' ? firstEvt.event.sessionId : null;
   // Disconnect immediately — turn is still running on server.
   ws.close();
   console.log(`  → disconnected at ${elapsed()}`);
   await new Promise(r => setTimeout(r, 2_500));
 
-  ws = await connect('4-reconnect');
+  // Pass session so the server-side runner Map can look up the right buffer.
+  ws = await connect('4-reconnect', sessionIdFromInit || undefined);
   const connected3 = await awaitMessage(ws, m => m.type === 'connected', 'reconnected-3', 5_000);
   if (!connected3.activeTurn) {
     console.log(`  ✗ no activeTurn on reconnected frame!`);
