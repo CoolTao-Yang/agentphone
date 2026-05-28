@@ -1318,6 +1318,86 @@
   $newModal.addEventListener('click', (e) => { if (e.target === $newModal) $newModal.classList.remove('open'); });
   $renameModal.addEventListener('click', (e) => { if (e.target === $renameModal) $renameModal.classList.remove('open'); });
 
+  // ─── v3.7 helpers (effort menu / banner / notifications) ──────
+  let notifyOnDone = false;
+  function openEffortMenu() { if ($effortMenu) { $effortMenu.classList.add('open'); $effortBd && $effortBd.classList.add('open'); } }
+  function closeEffortMenu() { if ($effortMenu) { $effortMenu.classList.remove('open'); $effortBd && $effortBd.classList.remove('open'); } }
+  function addBanner(kind, html) {
+    if (!$bannerRow) return;
+    const b = document.createElement('div');
+    b.className = 'banner ' + kind;
+    b.innerHTML = html + ' <button class="x" type="button" aria-label="dismiss">✕</button>';
+    b.querySelector('.x').addEventListener('click', () => b.remove());
+    $bannerRow.appendChild(b);
+  }
+  function maybeShowHttpsBanner() {
+    if (window.isSecureContext) return;
+    if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') return;
+    addBanner('warn',
+      '⚠ HTTP 模式 — 🎤 语音不能用。host 上跑 ' +
+      '<code>tailscale serve --bg https / http://localhost:8765</code> ' +
+      '获取 HTTPS URL。'
+    );
+  }
+  function maybeAskNotifyPermission() {
+    if (!('Notification' in window)) return;
+    if (Notification.permission === 'granted') notifyOnDone = true;
+  }
+  function requestNotifyOnFirstSend() {
+    if (!('Notification' in window) || Notification.permission !== 'default') return;
+    Notification.requestPermission().then((p) => {
+      notifyOnDone = (p === 'granted');
+      log('info', 'notification permission: ' + p);
+    }).catch(() => {});
+  }
+  function fireDoneNotification(payload) {
+    if (!notifyOnDone || !document.hidden) return;
+    try {
+      const dur = (payload.durationMs / 1000).toFixed(1);
+      const ok = payload.success && !payload.isError;
+      new Notification(ok ? 'agentphone · 完成' : 'agentphone · 出错', {
+        body: dur + 's · ' + (payload.turns || 0) + ' turns · $' + ((payload.costUsd || 0).toFixed(3)),
+        tag: 'agentphone-turn',
+      });
+    } catch (e) {
+      log('warn', 'notify failed: ' + (e && e.message || e));
+    }
+  }
+
+  if ($effortChip) {
+    $effortChip.addEventListener('click', () => {
+      ($effortMenu && $effortMenu.classList.contains('open')) ? closeEffortMenu() : openEffortMenu();
+    });
+  }
+  if ($effortMenu) {
+    $effortMenu.addEventListener('click', (e) => {
+      const t = e.target;
+      if (!(t instanceof HTMLElement)) return;
+      const lvl = t.getAttribute('data-effort');
+      if (!lvl) return;
+      sendWS({ type: 'set_settings', effort: lvl });
+      settings.effort = lvl;
+      reflectSettings();
+      closeEffortMenu();
+      showToast('effort → ' + lvl, 'ok', 1800);
+    });
+  }
+  if ($effortBd) $effortBd.addEventListener('click', closeEffortMenu);
+  if ($searchBox) $searchBox.addEventListener('input', applySessionFilter);
+  if (navigator.connection && typeof navigator.connection.addEventListener === 'function') {
+    navigator.connection.addEventListener('change', () => {
+      log('info', 'connection change → ' + (navigator.connection.effectiveType || '?'));
+      if (!ws || ws.readyState !== 1) {
+        log('warn', 'network changed and ws is dead — force reconnect');
+        try { ws && ws.close(); } catch (e) {}
+        ws = null;
+        reconnectAttempts = 0;
+        connect();
+      }
+    });
+  }
+
+
   // On Android Chrome backgrounded PWAs the JS context is frequently frozen
   // and the WebSocket dies — but onclose may not fire (or its reconnect
   // setTimeout doesn't run) until the page becomes visible again. So on
