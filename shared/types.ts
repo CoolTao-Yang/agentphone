@@ -7,7 +7,8 @@ export type ClientMessage =
   | { type: 'prompt'; text: string; images?: ImageAttachment[] }
   | { type: 'interrupt' }
   | { type: 'select_session'; sessionId: string | null; cwd?: string }
-  | { type: 'tool_response'; toolUseId: string; decision: 'allow' | 'deny'; allowRestOfTurn?: boolean };
+  | { type: 'tool_response'; toolUseId: string; decision: 'allow' | 'deny'; allowRestOfTurn?: boolean }
+  | { type: 'log'; level: 'info' | 'warn' | 'error' | 'ok'; message: string; ts?: number };
 
 // Base64 image data — `data` is the bare base64 (no "data:..." prefix).
 export type ImageAttachment = {

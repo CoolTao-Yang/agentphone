@@ -102,13 +102,21 @@
   }
 
   function log(level, msg) {
-    if (!$debug) return;
-    const line = document.createElement('div');
-    line.className = 'l-' + level;
-    line.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
-    $debug.appendChild(line);
-    while ($debug.childElementCount > 80) $debug.firstElementChild.remove();
-    $debug.scrollTop = $debug.scrollHeight;
+    // local debug panel
+    if ($debug) {
+      const line = document.createElement('div');
+      line.className = 'l-' + level;
+      line.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+      $debug.appendChild(line);
+      while ($debug.childElementCount > 80) $debug.firstElementChild.remove();
+      $debug.scrollTop = $debug.scrollHeight;
+    }
+    // ship to server so the desktop side can tail /tmp/agentphone-phone.log
+    if (ws && ws.readyState === 1) {
+      try {
+        ws.send(JSON.stringify({ type: 'log', level, message: msg, ts: Date.now() }));
+      } catch { /* ignore */ }
+    }
   }
 
   function setStatus(cls, text) {
@@ -565,11 +573,13 @@
       if (ev.code === 4001) { setStatus('error', '未授权'); return; }
       setStatus('error', '断开,重连中');
       setBusy(false);
-      log('warn', `ws closed (${ev.code}), reconnecting…`);
+      log('warn', `ws closed code=${ev.code} reason=${ev.reason || '-'} wasClean=${ev.wasClean}`);
       const wait = Math.min(8000, 500 * (1 + reconnectAttempts++));
       setTimeout(connect, wait);
     };
-    ws.onerror = (e) => { log('error', 'ws error'); };
+    ws.onerror = () => {
+      log('error', `ws error (readyState=${ws ? ws.readyState : 'null'} online=${navigator.onLine})`);
+    };
   }
 
   // ─── sessions REST ────────────────────────────────────────────

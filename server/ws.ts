@@ -7,10 +7,32 @@
 // all WS clients see the same logical "phone agent session". For now this is
 // single-tenant by design (one user, one home machine).
 
+import { appendFile, stat, truncate, writeFile } from 'node:fs/promises';
 import type { Hono } from 'hono';
 import type { ClientMessage, ServerMessage } from '../shared/types.ts';
 import { TurnRunner } from './runner.ts';
 import { defaultAgent, ownerOfSession } from './agents/registry.ts';
+
+// Where the phone-side log() output ends up. Tail this for live phone state:
+//   tail -f /tmp/agentphone-phone.log
+const PHONE_LOG_PATH = '/tmp/agentphone-phone.log';
+const PHONE_LOG_MAX_BYTES = 1_000_000; // 1MB hard cap, truncated from the front
+
+async function appendPhoneLog(line: string): Promise<void> {
+  try {
+    await appendFile(PHONE_LOG_PATH, line);
+    const st = await stat(PHONE_LOG_PATH);
+    if (st.size > PHONE_LOG_MAX_BYTES) {
+      // Read tail, write back. Crude but fine at 1MB.
+      const fs = await import('node:fs/promises');
+      const buf = await fs.readFile(PHONE_LOG_PATH);
+      const trimmed = buf.subarray(buf.length - Math.floor(PHONE_LOG_MAX_BYTES / 2));
+      await writeFile(PHONE_LOG_PATH, trimmed);
+    }
+  } catch {
+    /* logging failures should never crash the server */
+  }
+}
 
 type WSLike = { send(data: string): void; close(code?: number, reason?: string): void };
 type Cfg = { TOKEN: string; DEFAULT_CWD: string };
@@ -137,6 +159,15 @@ function createHandler(c: any, cfg: Cfg) {
           allow: msg.decision === 'allow',
           allowRestOfTurn: msg.allowRestOfTurn,
         });
+        return;
+      }
+
+      if (msg.type === 'log') {
+        const ts = msg.ts ? new Date(msg.ts) : new Date();
+        const iso = ts.toISOString();
+        const lvl = msg.level.toUpperCase().padEnd(5);
+        const line = `${iso} [${lvl}] ${msg.message}\n`;
+        appendPhoneLog(line).catch(() => {});
         return;
       }
 
