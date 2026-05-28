@@ -10,6 +10,7 @@
 
 import type {
   AgentEvent,
+  EffortLevel,
   ImageAttachment,
   SessionSummary,
   SessionMessagesResponse,
@@ -31,6 +32,7 @@ export type StartTurnOptions = {
   images?: ImageAttachment[];
   cwd: string;
   sessionId: string | null;
+  effort?: EffortLevel;
   canUseTool: CanUseToolFn;
 };
 

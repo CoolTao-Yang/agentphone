@@ -158,8 +158,14 @@ main#messages {
 }
 
 .msg {
-  margin: 0 0 18px;
+  margin: 0 0 14px;
   animation: fade-in 0.18s ease-out;
+}
+/* Consecutive assistant/thinking msgs are joined into one container by
+   the client — defensively dedupe vertical spacing if any sneak through. */
+.msg.assistant + .msg.assistant,
+.msg.thinking + .msg.thinking {
+  margin-top: -4px;
 }
 @keyframes fade-in {
   from { opacity: 0; transform: translateY(3px); }
@@ -199,6 +205,13 @@ main#messages {
 .body li { margin: 0.12em 0; }
 .body p:first-child, .body h1:first-child, .body h2:first-child, .body h3:first-child { margin-top: 0; }
 .body p:last-child { margin-bottom: 0; }
+
+/* Streaming sub-block inside an assistant message. Multiple .mblock
+   stack inside the same .body; we don't want extra gap between them. */
+.body .mblock { margin: 0; }
+.body .mblock + .mblock { margin-top: 0.55em; }
+.body .mblock > *:first-child { margin-top: 0; }
+.body .mblock > *:last-child  { margin-bottom: 0; }
 .body a  { color: var(--accent-2); text-decoration: underline; text-underline-offset: 2px; }
 .body strong { color: var(--text); font-weight: 600; }
 .body em { color: var(--text); }

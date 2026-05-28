@@ -152,6 +152,7 @@ export class ClaudeAgent implements Agent {
       options: {
         cwd: opts.cwd,
         ...(opts.sessionId ? { resume: opts.sessionId } : {}),
+        ...(opts.effort ? { effort: opts.effort } : {}),
         permissionMode: 'default',
         canUseTool: claudeCanUseTool,
         includePartialMessages: true,

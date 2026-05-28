@@ -8,7 +8,15 @@ export type ClientMessage =
   | { type: 'interrupt' }
   | { type: 'select_session'; sessionId: string | null; cwd?: string }
   | { type: 'tool_response'; toolUseId: string; decision: 'allow' | 'deny'; allowRestOfTurn?: boolean }
+  | { type: 'set_settings'; autoApproveTools?: boolean; effort?: EffortLevel }
   | { type: 'log'; level: 'info' | 'warn' | 'error' | 'ok'; message: string; ts?: number };
+
+export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
+export type AgentSettings = {
+  autoApproveTools: boolean;
+  effort: EffortLevel;
+};
 
 // Base64 image data — `data` is the bare base64 (no "data:..." prefix).
 export type ImageAttachment = {
@@ -29,7 +37,9 @@ export type ServerMessage =
       currentSessionId: string | null;
       claudeAccount: string;
       activeTurn: ActiveTurnState | null;
+      settings: AgentSettings;
     }
+  | { type: 'settings'; settings: AgentSettings }
   | { type: 'unauthorized' }
   | { type: 'session_set'; sessionId: string | null; cwd: string }
   | { type: 'agent_event'; event: AgentEvent }

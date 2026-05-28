@@ -9,9 +9,18 @@
 
 import { appendFile, stat, truncate, writeFile } from 'node:fs/promises';
 import type { Hono } from 'hono';
-import type { ClientMessage, ServerMessage } from '../shared/types.ts';
+import type { AgentSettings, ClientMessage, ServerMessage } from '../shared/types.ts';
 import { TurnRunner } from './runner.ts';
 import { defaultAgent, ownerOfSession } from './agents/registry.ts';
+
+// Module-level settings shared across WS connections. Phone toggles update
+// this; new prompts use the latest values. Defaults match desktop usage:
+//   - effort 'max' (matches CLAUDE_EFFORT=max we see on this user's shell)
+//   - autoApproveTools false (safe default — phone explicitly enables)
+let agentSettings: AgentSettings = {
+  autoApproveTools: false,
+  effort: 'max',
+};
 
 // Where the phone-side log() output ends up. Tail this for live phone state:
 //   tail -f /tmp/agentphone-phone.log
@@ -88,6 +97,7 @@ function createHandler(c: any, cfg: Cfg) {
         currentSessionId,
         claudeAccount: deriveAccountName(),
         activeTurn: r.activeState(),
+        settings: agentSettings,
       });
 
       unsubscribe = r.subscribe((emit) => {
@@ -171,6 +181,20 @@ function createHandler(c: any, cfg: Cfg) {
         return;
       }
 
+      if (msg.type === 'set_settings') {
+        if (typeof msg.autoApproveTools === 'boolean') {
+          agentSettings.autoApproveTools = msg.autoApproveTools;
+        }
+        if (msg.effort) {
+          agentSettings.effort = msg.effort;
+        }
+        // Broadcast the new settings to ALL listeners so other devices
+        // see it. We bounce through the runner's listeners by sending a
+        // settings message directly — runner doesn't need to know.
+        send({ type: 'settings', settings: agentSettings });
+        return;
+      }
+
       if (msg.type === 'prompt') {
         if (r.isActive()) {
           send({ type: 'error', message: '上一个对话还在进行' });
@@ -182,6 +206,8 @@ function createHandler(c: any, cfg: Cfg) {
             images: msg.images,
             cwd: currentCwd || cfg.DEFAULT_CWD,
             sessionId: currentSessionId,
+            effort: agentSettings.effort,
+            autoApproveAllTools: agentSettings.autoApproveTools,
           });
         } catch (err) {
           send({ type: 'error', message: err instanceof Error ? err.message : String(err) });

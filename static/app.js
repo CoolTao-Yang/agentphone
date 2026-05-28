@@ -29,6 +29,7 @@
   const $filePicker = document.getElementById('file-picker');
   const $chips      = document.getElementById('attach-chips');
   const $tts        = document.getElementById('tts-toggle');
+  const $autoBtn    = document.getElementById('auto-toggle');
   const $debugBtn   = document.getElementById('debug-toggle');
   const $debug      = document.getElementById('debug');
   const $dot        = document.getElementById('status-dot');
@@ -65,6 +66,15 @@
   let renamingSessionId = null;
   /** @type {Array<{ data: string, mediaType: string, name?: string }>} */
   let pendingImages = [];
+  /** @type {{ autoApproveTools: boolean, effort: string }} */
+  let settings = { autoApproveTools: false, effort: 'max' };
+
+  function reflectSettings() {
+    $autoBtn.setAttribute('aria-pressed', String(settings.autoApproveTools));
+    $autoBtn.title = settings.autoApproveTools
+      ? '自动批准工具调用 (yolo) — 已开 · 点击关闭'
+      : '自动批准工具调用 (yolo) — 关 · 点击开启';
+  }
 
   // streaming text state per (messageId:blockIndex)
   /** @type {Map<string, { rawText: string, el: HTMLElement, pendingRender: boolean, lastRender: number, kind: 'text'|'thinking' }>} */
@@ -164,11 +174,19 @@
   }
 
   // ─── streaming text blocks ────────────────────────────────────
-  function ensureAssistantMessage(kind) {
-    // create a new assistant or thinking msg block
+  // Merge consecutive assistant (or thinking) text blocks into ONE
+  // container so the same "claude" header isn't repeated for every
+  // sub-block. A new container starts whenever something else
+  // (user msg, tool card, result line, history separator…) intervenes.
+  function ensureAssistantContainer(kind) {
     clearEmpty();
+    const wantClass = kind === 'thinking' ? 'thinking' : 'assistant';
+    const last = $messages.lastElementChild;
+    if (last && last.classList.contains('msg') && last.classList.contains(wantClass)) {
+      return last.querySelector('.body');
+    }
     const msg = document.createElement('div');
-    msg.className = 'msg ' + (kind === 'thinking' ? 'thinking' : 'assistant');
+    msg.className = 'msg ' + wantClass;
     const who = document.createElement('div');
     who.className = 'who';
     who.textContent = kind === 'thinking' ? 'thinking' : 'claude';
@@ -181,11 +199,19 @@
     return body;
   }
 
+  function newAssistantBlockEl(container) {
+    const el = document.createElement('div');
+    el.className = 'mblock';
+    container.appendChild(el);
+    return el;
+  }
+
   function onAssistantBlockStart(evt) {
     if (evt.blockType !== 'text' && evt.blockType !== 'thinking') return;
     const key = `${evt.messageId}:${evt.blockIndex}`;
     if (streamState.has(key)) return;
-    const el = ensureAssistantMessage(evt.blockType);
+    const container = ensureAssistantContainer(evt.blockType);
+    const el = newAssistantBlockEl(container);
     streamState.set(key, {
       rawText: '',
       el,
@@ -216,8 +242,8 @@
     const key = `${evt.messageId}:${evt.blockIndex}`;
     let s = streamState.get(key);
     if (!s) {
-      // late delta without start — create on the fly
-      const el = ensureAssistantMessage('text');
+      const container = ensureAssistantContainer('text');
+      const el = newAssistantBlockEl(container);
       s = { rawText: '', el, pendingRender: false, lastRender: 0, kind: 'text' };
       streamState.set(key, s);
     }
@@ -229,7 +255,8 @@
     const key = `${evt.messageId}:${evt.blockIndex}`;
     let s = streamState.get(key);
     if (!s) {
-      const el = ensureAssistantMessage('thinking');
+      const container = ensureAssistantContainer('thinking');
+      const el = newAssistantBlockEl(container);
       s = { rawText: '', el, pendingRender: false, lastRender: 0, kind: 'thinking' };
       streamState.set(key, s);
     }
@@ -524,8 +551,10 @@
           setCwdDisplay(m.currentCwd);
           setAccountDisplay(m.claudeAccount);
           currentSessionId = m.currentSessionId;
+          if (m.settings) { settings = m.settings; reflectSettings(); }
           log('ok',
             `connected · account=${m.claudeAccount} · cwd=${m.currentCwd} · ` +
+            `auto=${settings.autoApproveTools} · effort=${settings.effort} · ` +
             `turn=${m.activeTurn ? (m.activeTurn.done ? 'done' : 'running') : 'none'}`);
           if (m.activeTurn && m.activeTurn.events && m.activeTurn.events.length) {
             clearMessages();
@@ -569,6 +598,11 @@
           setStatus('error', 'token 错误');
           appendError('URL 里的 token 不对');
           log('error', 'unauthorized');
+          break;
+        case 'settings':
+          settings = m.settings;
+          reflectSettings();
+          log('info', `settings: auto=${settings.autoApproveTools} effort=${settings.effort}`);
           break;
       }
     };
@@ -774,19 +808,10 @@
   }
 
   function renderHistoricalAssistant(text) {
-    clearEmpty();
-    const msg = document.createElement('div');
-    msg.className = 'msg assistant';
-    const who = document.createElement('div');
-    who.className = 'who';
-    who.textContent = 'claude';
-    const body = document.createElement('div');
-    body.className = 'body';
-    body.innerHTML = renderMarkdown(text);
-    highlightInside(body);
-    msg.appendChild(who);
-    msg.appendChild(body);
-    $messages.appendChild(msg);
+    const container = ensureAssistantContainer('text');
+    const el = newAssistantBlockEl(container);
+    el.innerHTML = renderMarkdown(text);
+    highlightInside(el);
   }
 
   function startNewSession(cwd) {
@@ -1164,6 +1189,15 @@
     const open = !$debug.classList.contains('open');
     $debug.classList.toggle('open', open);
     $debugBtn.setAttribute('aria-pressed', String(open));
+  });
+
+  $autoBtn.addEventListener('click', () => {
+    const next = !settings.autoApproveTools;
+    sendWS({ type: 'set_settings', autoApproveTools: next });
+    // Optimistic — server will broadcast back the canonical state.
+    settings.autoApproveTools = next;
+    reflectSettings();
+    showToast(next ? '已开启 auto 模式：工具调用自动批准' : 'auto 模式已关闭', 'ok', 2500);
   });
 
   $openDrawer.addEventListener('click', openDrawer);

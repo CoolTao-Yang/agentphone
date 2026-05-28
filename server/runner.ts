@@ -16,6 +16,7 @@ import { randomUUID } from 'node:crypto';
 import type {
   ActiveTurnState,
   AgentEvent,
+  EffortLevel,
 } from '../shared/types.ts';
 import type {
   Agent,
@@ -104,7 +105,7 @@ export class TurnRunner {
   }
 
   /** Start a turn. Throws if one is already active. */
-  start(opts: { prompt: string; images?: import('../shared/types.ts').ImageAttachment[]; cwd: string; sessionId: string | null }): string {
+  start(opts: { prompt: string; images?: import('../shared/types.ts').ImageAttachment[]; cwd: string; sessionId: string | null; effort?: EffortLevel; autoApproveAllTools?: boolean }): string {
     if (this.active) throw new Error('上一个对话还在进行');
 
     this.buffer = [];
@@ -112,10 +113,14 @@ export class TurnRunner {
     this.approveAllForTurn.clear();
     this.startedAtMs = Date.now();
 
+    const autoApproveAll = !!opts.autoApproveAllTools;
+
     const canUseTool: CanUseToolFn = async (toolName, input) => {
       const toolUseId = randomUUID();
 
-      if (this.approveAllForTurn.has(toolName)) {
+      // Global auto-approve (= "auto mode" on phone) or per-tool/per-turn
+      // approval set both result in immediate allow without prompting.
+      if (autoApproveAll || this.approveAllForTurn.has(toolName)) {
         this.record({
           kind: 'agent_event',
           event: { kind: 'tool_request', toolUseId, toolName, input, autoApproved: true },
@@ -154,6 +159,7 @@ export class TurnRunner {
       images: opts.images,
       cwd: opts.cwd,
       sessionId: opts.sessionId,
+      effort: opts.effort,
       canUseTool,
     });
 
