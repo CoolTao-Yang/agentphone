@@ -752,7 +752,16 @@
         : '';
       sep.textContent = `── 历史 ${msgs.length} 条${moreNote} · 新消息从下面开始 ──`;
       $messages.appendChild(sep);
-      autoScroll();
+      // After loading history, force scroll to bottom regardless of where
+      // the user was (autoScroll's near-bottom heuristic doesn't help here
+      // because the content height just exploded).
+      requestAnimationFrame(() => {
+        $messages.scrollTop = $messages.scrollHeight;
+        // double-tap on the next frame in case images haven't laid out yet
+        requestAnimationFrame(() => {
+          $messages.scrollTop = $messages.scrollHeight;
+        });
+      });
     } catch (e) {
       placeholder.textContent = '── 加载历史出错: ' + (e.message || e) + ' ──';
       placeholder.classList.add('err');
@@ -937,11 +946,15 @@
     $send.disabled = busy || (!$input.value.trim() && pendingImages.length === 0);
   }
 
-  $attachBtn.addEventListener('click', () => $filePicker.click());
+  $attachBtn.addEventListener('click', () => {
+    log('info', 'attach click');
+    $filePicker.click();
+  });
 
   $filePicker.addEventListener('change', async (e) => {
     const target = e.target;
     const files = target && target.files ? Array.from(target.files) : [];
+    log('info', `picker change: ${files.length} files (${files.map(f => f.type + '/' + Math.round(f.size/1024) + 'K').join(', ')})`);
     for (const f of files) {
       if (!f.type.startsWith('image/')) {
         showToast(`${f.name} 不是图片`, 'error');
@@ -1014,7 +1027,10 @@
       // don't disable; let user discover and we'll show clear toast
     }
     recog = new SR();
-    recog.lang = (navigator.language && /^zh/i.test(navigator.language)) ? 'zh-CN' : 'en-US';
+    // Default to zh-CN. Browser UI language is unrelated to what the user
+    // speaks (most users here have English Chrome UI but talk Chinese).
+    // We can expose a toggle later.
+    recog.lang = 'zh-CN';
     recog.interimResults = true;
     recog.continuous = false;
     recog.maxAlternatives = 1;
@@ -1040,16 +1056,20 @@
       recogActive = false;
       $mic.setAttribute('aria-pressed', 'false');
       const err = ev.error || 'unknown';
-      log('error', 'STT err: ' + err);
-      if (err === 'no-speech') {
-        // common, don't toast
+      log('error', `STT err: ${err} (secure=${window.isSecureContext})`);
+      if (err === 'no-speech') return; // common, don't toast
+      // On Android Chrome 94+ the Web Speech API silently fails (often as
+      // 'aborted' immediately after start) when the page isn't a secure
+      // context. We surface a single actionable hint in that case.
+      if (!window.isSecureContext && (err === 'aborted' || err === 'not-allowed' || err === 'service-not-allowed')) {
+        showToast(
+          '语音需要 HTTPS。Windows PowerShell 跑：tailscale serve --bg https / http://localhost:8765，然后用它给的 .ts.net URL',
+          'error', 9000
+        );
         return;
       }
       if (err === 'not-allowed' || err === 'service-not-allowed') {
-        const reasons = [];
-        if (!window.isSecureContext) reasons.push('当前页面不是 HTTPS');
-        reasons.push('或浏览器未授权麦克风');
-        showToast('语音权限被拒：' + reasons.join('，'), 'error', 5000);
+        showToast('麦克风权限被拒，去浏览器设置开启', 'error', 5000);
         return;
       }
       if (err === 'audio-capture') {
@@ -1069,22 +1089,13 @@
     };
   }
 
-  async function startSTT() {
+  function startSTT() {
     if (!recog) { showToast('此设备不支持语音识别', 'error'); return; }
     if (recogActive) { recog.stop(); return; }
-
-    // proactive permission check (Chrome 64+)
-    if (navigator.permissions && navigator.permissions.query) {
-      try {
-        const perm = await navigator.permissions.query({ name: 'microphone' });
-        log('info', 'mic perm: ' + perm.state);
-        if (perm.state === 'denied') {
-          showToast('麦克风权限已拒绝；请到浏览器设置里开', 'error', 5000);
-          return;
-        }
-      } catch { /* not all browsers expose this for microphone */ }
-    }
-
+    // CRITICAL: don't await anything before recog.start() — Chrome treats
+    // an async gap as breaking the user-gesture chain and the recognition
+    // aborts within 1 RAF. The permission query we used to do here was
+    // the cause of the immediate 'aborted' error.
     try {
       recog.start();
     } catch (e) {
