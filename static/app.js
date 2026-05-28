@@ -89,7 +89,7 @@
   /** @type {Array<{ data: string, mediaType: string, name?: string }>} */
   let pendingImages = [];
   /** @type {{ autoApproveTools: boolean, effort: string }} */
-  let settings = { autoApproveTools: false, effort: 'max' };
+  let settings = { autoApproveTools: false, effort: 'max', version: 0 };
 
   function reflectSettings() {
     $autoBtn.setAttribute('aria-pressed', String(settings.autoApproveTools));
@@ -656,7 +656,7 @@
           // persist server-side via settings
           const update = {};
           update[toolName] = true;
-          sendWS({ type: 'set_settings', perToolAuto: update });
+          sendWS({ type: 'set_settings', perToolAuto: update, expectedVersion: settings.version });
         }
         sendWS({ type: 'tool_response', toolUseId, decision: 'allow', allowRestOfTurn: cb.checked });
         markToolResolved(toolUseId, 'allow');
@@ -1077,7 +1077,16 @@
         case 'settings':
           settings = m.settings;
           reflectSettings();
-          log('info', `settings: auto=${settings.autoApproveTools} effort=${settings.effort}`);
+          log('info', `settings v${settings.version}: auto=${settings.autoApproveTools} effort=${settings.effort}`);
+          break;
+        case 'settings_conflict':
+          // Another client beat us to a settings update — adopt the
+          // server's current value (with bumped version) and reflect into
+          // the UI. The user can re-issue their click if they really want.
+          settings = m.current;
+          reflectSettings();
+          log('warn', `settings conflict — rebased to v${settings.version}`);
+          showToast('另一端已更新设置，已同步', 'warn', 1800);
           break;
       }
     };
@@ -1793,7 +1802,7 @@
 
   $autoBtn.addEventListener('click', () => {
     const next = !settings.autoApproveTools;
-    sendWS({ type: 'set_settings', autoApproveTools: next });
+    sendWS({ type: 'set_settings', autoApproveTools: next, expectedVersion: settings.version });
     // Optimistic — server will broadcast back the canonical state.
     settings.autoApproveTools = next;
     reflectSettings();
@@ -1900,7 +1909,7 @@
       if (!(t instanceof HTMLElement)) return;
       const lvl = t.getAttribute('data-effort');
       if (!lvl) return;
-      sendWS({ type: 'set_settings', effort: lvl });
+      sendWS({ type: 'set_settings', effort: lvl, expectedVersion: settings.version });
       settings.effort = lvl;
       reflectSettings();
       closeEffortMenu();

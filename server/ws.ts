@@ -32,11 +32,21 @@ function externalStatusFor(sessionId: string | null): ExternalSessionStatus | nu
 
 // Module-level settings shared across WS connections. Phone toggles update
 // this; new prompts use the latest values.
+//
+// Phase 4: also acts as a CRDT-style single source of truth — every change
+// bumps `version` and broadcasts to all connections. Clients pass the
+// version they last saw in set_settings; a mismatch yields `settings_conflict`
+// so two clients editing simultaneously can't silently clobber each other.
 let agentSettings: AgentSettings = {
   autoApproveTools: false,
   effort: 'max',
   perToolAuto: {},
+  version: 1,
 };
+
+// All currently-open WS senders. set_settings broadcasts to every entry on
+// successful update so other clients see the change without polling.
+const broadcasters = new Set<(msg: ServerMessage) => void>();
 
 const PHONE_LOG_PATH = '/tmp/agentphone-phone.log';
 const PHONE_LOG_MAX_BYTES = 1_000_000;
@@ -260,6 +270,8 @@ function createHandler(c: any, cfg: Cfg) {
       }
       console.log(`[ws] open sessionId=${myCurrentSessionId ?? 'new'} cwd=${myCurrentCwd}`);
       startHeartbeat();
+      // Register this connection for settings broadcasts (Phase 4).
+      broadcasters.add(send);
 
       const r = getRunnerForSession(myCurrentSessionId);
       subscribeToRunner(r);
@@ -400,6 +412,17 @@ function createHandler(c: any, cfg: Cfg) {
       }
 
       if (msg.type === 'set_settings') {
+        // Versioned-update gate (Phase 4). If the client included
+        // expectedVersion and it doesn't match what we hold, another client
+        // updated meanwhile — reject with settings_conflict carrying the
+        // current value so the rejected client can rebase.
+        if (typeof msg.expectedVersion === 'number' && msg.expectedVersion !== agentSettings.version) {
+          console.log(
+            `[ws] set_settings conflict: client expected v${msg.expectedVersion}, server has v${agentSettings.version}`,
+          );
+          send({ type: 'settings_conflict', current: agentSettings });
+          return;
+        }
         if (typeof msg.autoApproveTools === 'boolean') {
           agentSettings.autoApproveTools = msg.autoApproveTools;
         }
@@ -409,7 +432,13 @@ function createHandler(c: any, cfg: Cfg) {
         if (msg.perToolAuto) {
           agentSettings.perToolAuto = { ...(agentSettings.perToolAuto ?? {}), ...msg.perToolAuto };
         }
-        send({ type: 'settings', settings: agentSettings });
+        agentSettings.version += 1;
+        // Broadcast to every open connection so multi-client UIs stay in
+        // sync without polling — the sender gets the same message too.
+        const payload: ServerMessage = { type: 'settings', settings: agentSettings };
+        for (const b of broadcasters) {
+          try { b(payload); } catch { /* ignore individual delivery failure */ }
+        }
         return;
       }
 
@@ -544,6 +573,7 @@ function createHandler(c: any, cfg: Cfg) {
       if (myUnsubscribe) { myUnsubscribe(); myUnsubscribe = null; }
       if (myExternalUnsubscribe) { myExternalUnsubscribe(); myExternalUnsubscribe = null; }
       if (myExternalWatcherStop) { myExternalWatcherStop(); myExternalWatcherStop = null; }
+      broadcasters.delete(send);
       stopHeartbeat();
       ws = null;
     },

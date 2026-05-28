@@ -11,13 +11,18 @@
 // hardcoding them.
 
 import { ClaudeSdkAdapter } from './claude-sdk/adapter.ts';
+import { CodexAdapter } from './codex/adapter.ts';
 import { externalSessions } from './cmax-external/tracker.ts';
 import type { HarnessAdapter, HarnessKind, AgentKind } from './types.ts';
 
 // ── Owned adapters (we spawn agent processes) ─────────────────
 export const harnesses: HarnessAdapter[] = [
   new ClaudeSdkAdapter(),
-  // new CodexAdapter(),    // Phase 5
+  // CodexAdapter is a stub — listSessions returns [] until codex is
+  // installed AND we wire spawn('codex', ...) in startTurn. Including it
+  // here exercises the registry path so future PRs adding real codex
+  // support only need to fill in adapter.ts.
+  new CodexAdapter(),
   // new CursorAdapter(),
 ];
 

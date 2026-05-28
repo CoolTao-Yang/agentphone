@@ -8,7 +8,18 @@ export type ClientMessage =
   | { type: 'interrupt' }
   | { type: 'select_session'; sessionId: string | null; cwd?: string }
   | { type: 'tool_response'; toolUseId: string; decision: 'allow' | 'deny'; allowRestOfTurn?: boolean }
-  | { type: 'set_settings'; autoApproveTools?: boolean; effort?: EffortLevel; perToolAuto?: Record<string, boolean> }
+  // CRDT-style optimistic-concurrency update: client passes expectedVersion
+  // (the version it last saw). Server rejects with `settings_conflict` if a
+  // different client has updated in the meantime, then the rejected client
+  // can refetch + retry. If expectedVersion is missing the server applies
+  // anyway (no-conflict legacy path).
+  | {
+      type: 'set_settings';
+      expectedVersion?: number;
+      autoApproveTools?: boolean;
+      effort?: EffortLevel;
+      perToolAuto?: Record<string, boolean>;
+    }
   | { type: 'log'; level: 'info' | 'warn' | 'error' | 'ok'; message: string; ts?: number }
   | { type: 'pong'; ts: number }
   // Acknowledge that the user is OK driving a session that another end
@@ -34,6 +45,10 @@ export type AgentSettings = {
   // Per-tool auto-approve rules: tool name → auto-allow. Wildcard '*' means
   // "all tools". autoApproveTools (above) is shorthand for `'*': true`.
   perToolAuto?: Record<string, boolean>;
+  // Monotonic version bump on every change. Clients pass the version they
+  // last saw in set_settings.expectedVersion; on mismatch the server returns
+  // settings_conflict so the client can rebase + retry.
+  version: number;
 };
 
 // Base64 image data — `data` is the bare base64 (no "data:..." prefix).
@@ -63,6 +78,10 @@ export type ServerMessage =
       external: ExternalSessionStatus | null;
     }
   | { type: 'settings'; settings: AgentSettings }
+  // Server rejected a set_settings because expectedVersion was stale; client
+  // should adopt the included `current` AgentSettings and re-derive its UI
+  // (no retry — user can re-issue the click if they really want).
+  | { type: 'settings_conflict'; current: AgentSettings }
   | { type: 'ping'; ts: number }
   | { type: 'unauthorized' }
   | { type: 'session_set'; sessionId: string | null; cwd: string; external: ExternalSessionStatus | null }
