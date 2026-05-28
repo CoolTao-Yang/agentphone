@@ -1361,7 +1361,9 @@
   }
 
   function startNewSession(cwd) {
-    sendWS({ type: 'select_session', sessionId: null, cwd });
+    console.log('[+ 新建] startNewSession cwd=', cwd, 'ws.readyState=', ws?.readyState);
+    const ok = sendWS({ type: 'select_session', sessionId: null, cwd });
+    console.log('[+ 新建] sendWS returned', ok);
     clearMessages();
     currentSessionId = null;
     setCwdDisplay(cwd);
@@ -1394,6 +1396,11 @@
 
   // ─── new session modal ────────────────────────────────────────
   function openNewSessionModal() {
+    console.log('[+ 新建] openNewSessionModal clicked, currentCwd=', currentCwd, 'defaultCwd=', defaultCwd);
+    if (!$newModal) {
+      console.error('[+ 新建] $newModal not found in DOM');
+      return;
+    }
     $nsName.value = '';
     $nsCwd.value = currentCwd || defaultCwd || '';
     renderCwdSuggestions(recentCwdList);
