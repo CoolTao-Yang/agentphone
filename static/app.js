@@ -607,6 +607,66 @@
     autoScroll();
   }
 
+  function appendContextFullCard(rawMsg) {
+    clearEmpty();
+    const wrap = document.createElement('div');
+    wrap.className = 'msg error context-full';
+    const who = document.createElement('div'); who.className = 'who'; who.textContent = '上下文已满';
+    const body = document.createElement('div'); body.className = 'body';
+    const lead = document.createElement('p');
+    lead.style.margin = '0 0 8px';
+    lead.textContent = '这个 session 的 context window 用满了。两个出路:';
+    const acts = document.createElement('div');
+    acts.className = 'cf-actions';
+    const compactBtn = document.createElement('button');
+    compactBtn.className = 'tool-btn allow';
+    compactBtn.textContent = '⚡ 压缩此 session';
+    const newBtn = document.createElement('button');
+    newBtn.className = 'tool-btn';
+    newBtn.textContent = '+ 新建 session';
+    const hint = document.createElement('p');
+    hint.className = 'cf-hint';
+    hint.textContent = '压缩 = 让 agent 把当前对话浓缩成摘要后继续。新建 = 完全重启。';
+    acts.appendChild(compactBtn);
+    acts.appendChild(newBtn);
+    body.appendChild(lead);
+    body.appendChild(acts);
+    body.appendChild(hint);
+    if (rawMsg) {
+      const raw = document.createElement('details');
+      const sum = document.createElement('summary');
+      sum.style.cursor = 'pointer';
+      sum.style.fontSize = '11px';
+      sum.style.color = 'var(--muted)';
+      sum.textContent = '原始 SDK 错误';
+      const pre = document.createElement('pre');
+      pre.style.fontSize = '11px';
+      pre.style.color = 'var(--muted)';
+      pre.style.whiteSpace = 'pre-wrap';
+      pre.textContent = String(rawMsg);
+      raw.appendChild(sum);
+      raw.appendChild(pre);
+      body.appendChild(raw);
+    }
+    wrap.appendChild(who);
+    wrap.appendChild(body);
+    $messages.appendChild(wrap);
+    autoScroll();
+
+    compactBtn.addEventListener('click', () => {
+      sendWS({ type: 'prompt', text: '/compact' });
+      setBusy(true);
+      compactBtn.disabled = true;
+      newBtn.disabled = true;
+      compactBtn.textContent = '正在压缩...';
+    });
+    newBtn.addEventListener('click', () => {
+      sendWS({ type: 'select_session', sessionId: null });
+      clearMessages();
+      showToast('已创建新 session', 'ok', 1500);
+    });
+  }
+
   // ─── agent event dispatch ─────────────────────────────────────
   function dispatchAgentEvent(evt) {
     switch (evt.kind) {
@@ -779,10 +839,14 @@
           loadSessions();
           break;
         case 'error':
-          appendError(m.message);
           setBusy(false);
-          showToast(m.message, 'error', 3500);
           log('error', m.message);
+          if (/context\s*limit|too\s*long|maximum.*context|compact.*continue/i.test(m.message || '')) {
+            appendContextFullCard(m.message);
+          } else {
+            appendError(m.message);
+            showToast(m.message, 'error', 3500);
+          }
           break;
         case 'unauthorized':
           setStatus('error', 'token 错误');

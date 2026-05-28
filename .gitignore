@@ -35,3 +35,4 @@ android/app/src/main/assets/cordova_plugins.js
 
 # Optional: ignore lockfile if you don't want to commit it
 # package-lock.json
+static/dist/
