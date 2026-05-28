@@ -82,7 +82,11 @@
   function renderMarkdown(text) {
     if (!window.marked) return `<pre>${escapeHtml(text)}</pre>`;
     try {
-      return window.marked.parse(text, { gfm: true, breaks: true, async: false });
+      // Standard markdown rendering: a single \n is whitespace, not a <br>.
+      // (We used to have breaks:true which forced every single newline into
+      // a line break, which made Claude's prose look like a wall of broken
+      // lines on phone.) Paragraph separation comes from real blank lines.
+      return window.marked.parse(text, { gfm: true, breaks: false, async: false });
     } catch {
       return `<pre>${escapeHtml(text)}</pre>`;
     }
