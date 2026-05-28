@@ -20,6 +20,8 @@ import type { AgentSettings, ClientMessage, ExternalSessionStatus, ServerMessage
 import { TurnRunner } from './runner.ts';
 import { defaultAgent, externalSessions, ownerOfSession } from './harness/registry.ts';
 import { watchJsonl, jsonlPathFor } from './harness/cmax-external/jsonl-watcher.ts';
+import { appendInjectUserMessage, appendMirrorEntry } from './harness/cmax-external/jsonl-writer.ts';
+import { linkStore } from './store/links.ts';
 
 function externalStatusFor(sessionId: string | null): ExternalSessionStatus | null {
   if (!sessionId) return null;
@@ -124,6 +126,11 @@ function createHandler(c: any, cfg: Cfg) {
   // these external events; assigned a synthetic turnId tied to the session.
   let myExternalWatcherStop: (() => void) | null = null;
   let myExtSeq = 0;
+  // Per-turn capture so the mirror writer can produce a (user → assistant)
+  // summary when a phone-owned session finishes a turn. Set on the 'prompt'
+  // path, accumulated on text_delta events, flushed + reset on turn_done.
+  let myCurrentTurnPrompt: string = '';
+  let myCurrentTurnAssistantText: string = '';
 
   const send = (msg: ServerMessage) => { if (ws) ws.send(JSON.stringify(msg)); };
 
@@ -185,17 +192,61 @@ function createHandler(c: any, cfg: Cfg) {
       switch (emit.kind) {
         case 'agent_event': {
           const tid = r.turnId() || '';
+          // Capture assistant text for the mirror writer (α path). Tool ops
+          // and thinking aren't included — mirror is meant to be a short
+          // human-readable summary, not a full transcript.
+          if (emit.event.kind === 'text_delta') {
+            myCurrentTurnAssistantText += emit.event.delta;
+          }
           send({ type: 'agent_event', turnId: tid, seq: emit.seq, event: emit.event });
           return;
         }
         case 'turn_done':
+          maybeWriteMirror().catch((e) => {
+            console.error('[ws] mirror write failed:', e instanceof Error ? e.message : String(e));
+          });
           send({ type: 'turn_done' });
+          // Reset capture buffers for the next turn on this session.
+          myCurrentTurnPrompt = '';
+          myCurrentTurnAssistantText = '';
           return;
         case 'error':
+          // On error, drop the capture — we don't want a half-mirror.
+          myCurrentTurnPrompt = '';
+          myCurrentTurnAssistantText = '';
           send({ type: 'error', message: emit.message });
           return;
       }
     });
+  }
+
+  /** If the just-finished turn is on a phone-owned session that's linked to
+   *  an external CLI session, append a mirror entry to the external jsonl. */
+  async function maybeWriteMirror(): Promise<void> {
+    const phoneSid = myCurrentSessionId;
+    if (!phoneSid) return;
+    // Phone-owned only — never mirror an external session into another
+    // external session.
+    if (externalSessions.get(phoneSid)) return;
+    const externalSid = await linkStore.externalFor(phoneSid);
+    if (!externalSid) return;
+    const ext = externalSessions.get(externalSid);
+    if (!ext) {
+      console.warn(`[ws] mirror skipped: link target ${externalSid.slice(0, 8)} no longer alive`);
+      return;
+    }
+    const path = jsonlPathFor(ext.account, ext.cwd, externalSid);
+    await appendMirrorEntry(
+      path,
+      externalSid,
+      myCurrentTurnPrompt,
+      myCurrentTurnAssistantText,
+      { phoneSessionId: phoneSid, cwd: ext.cwd },
+    );
+    console.log(
+      `[ws] mirrored phone session ${phoneSid.slice(0, 8)} → cmax ${externalSid.slice(0, 8)} ` +
+      `(${myCurrentTurnAssistantText.length} chars assistant text)`,
+    );
   }
 
   return {
@@ -239,6 +290,17 @@ function createHandler(c: any, cfg: Cfg) {
         settings: agentSettings,
         external: externalStatusFor(myCurrentSessionId),
       });
+      // Surface any saved phone→external link for this session so the client
+      // shows the 📎 badge without an extra round-trip. Fire-and-forget —
+      // onOpen is sync so we can't await here.
+      if (myCurrentSessionId) {
+        const sid = myCurrentSessionId;
+        linkStore.externalFor(sid).then((externalSid) => {
+          if (externalSid) {
+            send({ type: 'link_info', phoneSessionId: sid, externalSessionId: externalSid });
+          }
+        }).catch(() => { /* not fatal */ });
+      }
     },
 
     async onMessage(evt: any, w: WSLike) {
@@ -276,6 +338,12 @@ function createHandler(c: any, cfg: Cfg) {
           cwd: myCurrentCwd,
           external: externalStatusFor(myCurrentSessionId),
         });
+        if (myCurrentSessionId) {
+          const externalSid = await linkStore.externalFor(myCurrentSessionId);
+          if (externalSid) {
+            send({ type: 'link_info', phoneSessionId: myCurrentSessionId, externalSessionId: externalSid });
+          }
+        }
         // Also re-send connected-style state so the client picks up the
         // new active turn (if any) and renders correctly.
         const state = newRunner.activeState();
@@ -391,6 +459,13 @@ function createHandler(c: any, cfg: Cfg) {
           return;
         }
         try {
+          // Capture for the mirror writer (α). On turn_done the runner sub
+          // checks the link store and, if linked, writes a mirror summary
+          // (this prompt + accumulated assistant text) to the external
+          // jsonl. Reset here so we don't carry over stale text from a
+          // prior turn that errored.
+          myCurrentTurnPrompt = msg.text || '';
+          myCurrentTurnAssistantText = '';
           r.start({
             prompt: msg.text,
             images: msg.images,
@@ -402,6 +477,61 @@ function createHandler(c: any, cfg: Cfg) {
           });
         } catch (err) {
           send({ type: 'error', message: err instanceof Error ? err.message : String(err) });
+        }
+        return;
+      }
+
+      // β path: phone wrote a message to be injected directly into a CLI-
+      // owned session's jsonl. cmax sees it as a queued user prompt.
+      if (msg.type === 'inject_to_external') {
+        const ext = externalSessions.get(msg.sessionId);
+        if (!ext) {
+          console.log(`[ws] inject rejected: ${msg.sessionId.slice(0, 8)} not externally owned`);
+          send({ type: 'error', message: '只能注入到外部 CLI 拥有的 session' });
+          return;
+        }
+        const text = (msg.text || '').trim();
+        if (!text) {
+          send({ type: 'error', message: '内容为空' });
+          return;
+        }
+        const path = jsonlPathFor(ext.account, ext.cwd, msg.sessionId);
+        try {
+          const uuid = await appendInjectUserMessage(path, msg.sessionId, text, { cwd: ext.cwd });
+          console.log(
+            `[ws] inject → ${ext.account}/${msg.sessionId.slice(0, 8)} ` +
+            `uuid=${uuid.slice(0, 8)} text="${text.slice(0, 60).replace(/\s+/g, ' ')}"`,
+          );
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          console.error(`[ws] inject failed:`, errMsg);
+          send({ type: 'error', message: '注入失败: ' + errMsg });
+        }
+        return;
+      }
+
+      // α path: declare a phone-session-to-CLI-session link. The mirror runs
+      // on every subsequent turn_done for the linked phone session until the
+      // link is replaced (with another externalSessionId) or cleared (null).
+      if (msg.type === 'set_link') {
+        try {
+          if (msg.externalSessionId === null) {
+            await linkStore.unlink(msg.phoneSessionId);
+            console.log(`[ws] unlinked phone ${msg.phoneSessionId.slice(0, 8)}`);
+          } else {
+            await linkStore.link(msg.phoneSessionId, msg.externalSessionId);
+            console.log(
+              `[ws] linked phone ${msg.phoneSessionId.slice(0, 8)} → ` +
+              `cmax ${msg.externalSessionId.slice(0, 8)}`,
+            );
+          }
+          send({
+            type: 'link_info',
+            phoneSessionId: msg.phoneSessionId,
+            externalSessionId: msg.externalSessionId,
+          });
+        } catch (err) {
+          send({ type: 'error', message: 'link 失败: ' + (err instanceof Error ? err.message : String(err)) });
         }
         return;
       }

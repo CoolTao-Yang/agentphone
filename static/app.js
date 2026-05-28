@@ -225,14 +225,22 @@
     }
   }
 
-  // True whenever an external claude.exe (CLI / bg) owns the current
-  // session. We always block — two SDK processes resuming the same jsonl
-  // race for assistant writes and the loser exits with [ede_diagnostic].
-  // No "takeover" any more — the only safe escape is to create a new
-  // session that agentphone owns end-to-end.
+  // True whenever an external claude.exe (CLI / bg) owns the current session
+  // AND the user hasn't switched to inject mode. Inject mode unlocks the
+  // composer so the user can append a message to the external jsonl directly
+  // (β path) — cmax sees it as queued user input.
   function isFollowBlocked() {
-    return !!currentExternal;
+    return !!currentExternal && !injectMode;
   }
+
+  // Inject mode: phone is on an externally-owned session and the user wants
+  // to drop a message into CLI's queue rather than just watch. Toggled by
+  // the 📤 button in the follow banner.
+  let injectMode = false;
+  // Link badge: phone-owned session that's mirroring to a CLI session A.
+  // Server pushes link_info after select_session or after the user clicks
+  // the 🔀 fork button.
+  let currentLinkExternalSid = null;
 
   // Follow-mode used to poll /api/sessions/:id/messages every 4s while the
   // external driver was busy. Since v19 the server pushes live events from
@@ -243,34 +251,80 @@
   function startFollowRefresh() { /* server pushes via watcher */ }
   function stopFollowRefresh()  { /* nothing to stop */ }
 
-  /** Reflect currentExternal into UI: banner + send-button gate + input hint. */
+  /** Reflect currentExternal + currentLinkExternalSid into UI. */
   function applyFollowMode() {
-    // Remove previous follow-mode banner (we always re-render — easier than diffing).
     if ($bannerRow) {
       const old = $bannerRow.querySelector('.banner.follow-mode');
       if (old) old.remove();
+      const oldLink = $bannerRow.querySelector('.banner.link-mode');
+      if (oldLink) oldLink.remove();
     }
-    if (!currentExternal) {
+
+    // CASE 1: phone-owned session linked to an external CLI session — show
+    // a small "📎 mirroring to cmax/xxxx" badge banner, composer normal.
+    if (!currentExternal && currentLinkExternalSid) {
       $input.placeholder = '问 claude…';
-      followModeTakenOver = false;  // dead state, but keep flag in sync
+      addLinkBanner();
       stopFollowRefresh();
-      setBusy(busy);                // recompute send-button enablement
+      setBusy(busy);
       return;
     }
-    const ext = currentExternal;
-    // Poll history only while the owner is actively writing; idle owners
-    // aren't appending anything so the poll would just burn cycles.
-    if (ext.status === 'busy') startFollowRefresh();
-    else stopFollowRefresh();
 
-    $input.placeholder = `🔒 ${ext.account} CLI 拥有此 session · 不能发送`;
-    const verb = ext.status === 'busy' ? '正在思考' : 'idle';
-    const html = `👀 <b>follow mode</b> — <code>${ext.account}</code> 的 ${ext.kind} CLI ` +
-                 `(<code>pid ${ext.pid}</code>) 拥有此 session · ${verb}。` +
-                 ` 两个 claude.exe 同时写同一份 jsonl 会冲突，所以手机端只读。` +
-                 ` 要在手机聊 → <button type="button" class="follow-newsession">+ 新建 session</button>`;
-    addFollowBanner(html);
+    // CASE 2: no external owner, no link → vanilla mode.
+    if (!currentExternal) {
+      $input.placeholder = '问 claude…';
+      injectMode = false;
+      stopFollowRefresh();
+      setBusy(busy);
+      return;
+    }
+
+    // CASE 3: external owner present.
+    const ext = currentExternal;
+    if (ext.status === 'busy') startFollowRefresh(); else stopFollowRefresh();
+
+    if (injectMode) {
+      $input.placeholder = `📤 注入到 ${ext.account} CLI queue · 桌面按 Enter 才真的发`;
+      const html = `📤 <b>inject mode</b> — 输入的消息会**写到 cmax 的 queue**。` +
+                   ` 同一份 session, 0 race。但需要桌面 CLI 按 Enter 才真的触发响应。` +
+                   ` <button type="button" class="follow-cancel-inject">退出 inject</button>`;
+      addFollowBanner(html);
+    } else {
+      $input.placeholder = `🔒 ${ext.account} CLI 拥有此 session · 选择行动 →`;
+      const verb = ext.status === 'busy' ? '正在思考' : 'idle';
+      const html = `👀 <b>follow mode</b> — <code>${ext.account}</code> 的 ${ext.kind} CLI ` +
+                   `(<code>pid ${ext.pid}</code>) ${verb}。` +
+                   ` 选择: ` +
+                   ` <button type="button" class="follow-inject">📤 注入到 CLI</button>` +
+                   ` <button type="button" class="follow-fork">🔀 fork 新 session</button>`;
+      addFollowBanner(html);
+    }
     setBusy(busy);
+  }
+
+  function addLinkBanner() {
+    if (!$bannerRow) return;
+    const b = document.createElement('div');
+    b.className = 'banner info link-mode';
+    const sid = currentLinkExternalSid ?? '';
+    b.innerHTML =
+      `📎 <b>linked</b> — 此 session 的每个 turn 会自动 mirror 到 cmax session ` +
+      `<code>${sid.slice(0, 8)}</code>。 ` +
+      `<button type="button" class="link-unlink">✕ 取消 link</button>` +
+      ` <button class="x" type="button" aria-label="dismiss">✕</button>`;
+    b.querySelector('.x').addEventListener('click', () => b.remove());
+    const unlinkBtn = b.querySelector('.link-unlink');
+    if (unlinkBtn) {
+      unlinkBtn.addEventListener('click', () => {
+        if (!currentSessionId) return;
+        sendWS({ type: 'set_link', phoneSessionId: currentSessionId, externalSessionId: null });
+        // server will echo link_info with null; for snappier UI clear locally
+        currentLinkExternalSid = null;
+        applyFollowMode();
+        showToast('已取消 mirror link', 'ok', 1500);
+      });
+    }
+    $bannerRow.appendChild(b);
   }
 
   function addFollowBanner(html) {
@@ -279,15 +333,39 @@
     b.className = 'banner warn follow-mode';
     b.innerHTML = html + ' <button class="x" type="button" aria-label="dismiss">✕</button>';
     b.querySelector('.x').addEventListener('click', () => b.remove());
-    const newBtn = b.querySelector('.follow-newsession');
-    if (newBtn) {
-      newBtn.addEventListener('click', () => {
+
+    const injectBtn = b.querySelector('.follow-inject');
+    if (injectBtn) {
+      injectBtn.addEventListener('click', () => {
+        injectMode = true;
+        applyFollowMode();
+        $input.focus();
+        showToast('inject 模式 · 内容会写到 CLI queue', 'ok', 1800);
+      });
+    }
+    const cancelInjectBtn = b.querySelector('.follow-cancel-inject');
+    if (cancelInjectBtn) {
+      cancelInjectBtn.addEventListener('click', () => {
+        injectMode = false;
+        applyFollowMode();
+      });
+    }
+    const forkBtn = b.querySelector('.follow-fork');
+    if (forkBtn) {
+      forkBtn.addEventListener('click', () => {
+        // Stash the current external sid so once the new session is born we
+        // can call set_link with it.
+        pendingForkLinkTo = currentSessionId;
         if (typeof openNewSessionModal === 'function') openNewSessionModal();
         else $newSessionBtn?.click();
       });
     }
     $bannerRow.appendChild(b);
   }
+
+  // Set when user clicked "🔀 fork" — used to auto-issue set_link as soon as
+  // the new session_init lands.
+  let pendingForkLinkTo = null;
 
   // If busy for 90s with no incoming agent_event the agent is likely stuck
   // (or our WS heartbeat fix already reconnected but no events came). Offer
@@ -917,8 +995,27 @@
           setCwdDisplay(m.cwd);
           currentExternal = m.external || null;
           followModeTakenOver = false;
+          // Switching sessions wipes the link badge until server sends a
+          // fresh link_info for the new session (if any).
+          currentLinkExternalSid = null;
+          // If the user just clicked "🔀 fork" we stashed the source external
+          // sid in pendingForkLinkTo. The new session was just born — issue
+          // set_link now to wire B → A.
+          if (pendingForkLinkTo && m.sessionId) {
+            sendWS({ type: 'set_link', phoneSessionId: m.sessionId, externalSessionId: pendingForkLinkTo });
+            // (don't clear yet — wait for the link_info echo, which will set
+            //  currentLinkExternalSid; we just clear pendingForkLinkTo below)
+            pendingForkLinkTo = null;
+          }
           applyFollowMode();
           log('info', 'session set ' + (m.sessionId ? m.sessionId.slice(0,8) : '(new)') + ' cwd=' + m.cwd);
+          break;
+        case 'link_info':
+          // Echo from server after set_link (or surfaced on initial connect).
+          if (m.phoneSessionId === currentSessionId) {
+            currentLinkExternalSid = m.externalSessionId || null;
+            applyFollowMode();
+          }
           break;
         case 'external_status': {
           // Update the drawer entry without a full refetch.
@@ -1379,6 +1476,33 @@
     }
 
     const imgs = pendingImages.slice();
+
+    // β path: in inject mode, route to inject_to_external — server appends
+    // a user-message entry to the externally-owned session's jsonl. No local
+    // turn is started; the response comes back live via the jsonl-watcher
+    // when cmax processes the queued message.
+    if (injectMode) {
+      if (!currentSessionId || !currentExternal) {
+        showToast('inject 模式要求选中一个 CLI 拥有的 session', 'error', 2500);
+        return;
+      }
+      appendUser(text, imgs);  // render locally so user sees their input
+      sendWS({
+        type: 'inject_to_external',
+        sessionId: currentSessionId,
+        text,
+        images: imgs.length ? imgs : undefined,
+      });
+      $input.value = '';
+      pendingImages = [];
+      renderChips();
+      autoResize();
+      // Don't set busy — we didn't start a local turn. The watcher will
+      // surface the queued message + any response cmax produces.
+      showToast('已注入到 CLI queue · 桌面按 Enter 才会真的发', 'ok', 2500);
+      return;
+    }
+
     appendUser(text, imgs);
     sendWS({ type: 'prompt', text, images: imgs.length ? imgs : undefined });
     $input.value = '';

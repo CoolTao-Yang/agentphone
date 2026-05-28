@@ -14,7 +14,17 @@ export type ClientMessage =
   // Acknowledge that the user is OK driving a session that another end
   // (CLI / bg job) is also driving. Until takeover is sent, the server tells
   // the client `followMode:true` and rejects prompts.
-  | { type: 'takeover'; sessionId: string };
+  | { type: 'takeover'; sessionId: string }
+  // β path: phone writes the text as a user message into an externally-owned
+  // session's jsonl. cmax sees it as a queued user prompt — desktop user
+  // presses Enter to actually trigger the response (or cmax auto-fires if
+  // it's in an interactive prompt state).
+  | { type: 'inject_to_external'; sessionId: string; text: string; images?: ImageAttachment[] }
+  // α path: declare that a phone-owned session is "linked" to an external
+  // CLI session, so each completed turn on the phone gets mirrored into
+  // the external jsonl as a system entry. Pass null externalSessionId to
+  // unlink.
+  | { type: 'set_link'; phoneSessionId: string; externalSessionId: string | null };
 
 export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
@@ -62,7 +72,10 @@ export type ServerMessage =
   // Status of an externally-driven session changed (busy↔idle, or appeared/
   // disappeared). The client uses this to flip the drawer dot and the header
   // banner without polling.
-  | { type: 'external_status'; sessionId: string; external: ExternalSessionStatus | null };
+  | { type: 'external_status'; sessionId: string; external: ExternalSessionStatus | null }
+  // Echo of the current link state for a phone-owned session. Server sends
+  // after set_link or on initial select_session if a saved link exists.
+  | { type: 'link_info'; phoneSessionId: string; externalSessionId: string | null };
 
 export type ExternalSessionStatus = {
   pid: number;
