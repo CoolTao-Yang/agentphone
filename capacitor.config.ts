@@ -25,6 +25,11 @@ const config: CapacitorConfig = {
     // doesn't get blocked as mixed-content from https://localhost.
     androidScheme: 'http',
     cleartext: true,
+    // Without this Capacitor's WebView dumps any non-localhost navigation
+    // to the system browser — which would break the bootstrap → user-
+    // configured server URL flow. '*' is safe here because the user
+    // explicitly enters the URL on first launch.
+    allowNavigation: ['*'],
   },
 };
 
