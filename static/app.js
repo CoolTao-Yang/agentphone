@@ -29,6 +29,7 @@
   const $filePicker = document.getElementById('file-picker');
   const $chips      = document.getElementById('attach-chips');
   const $tts        = document.getElementById('tts-toggle');
+  const $refreshBtn = document.getElementById('refresh-btn');
   const $autoBtn    = document.getElementById('auto-toggle');
   const $effortChip = document.getElementById('effort-chip');
   const $effortMenu = document.getElementById('effort-menu');
@@ -1375,6 +1376,33 @@
     reflectSettings();
     showToast(next ? '已开启 auto 模式：工具调用自动批准' : 'auto 模式已关闭', 'ok', 2500);
   });
+
+  async function refreshNow() {
+    // Spin the icon while in-flight
+    if ($refreshBtn) $refreshBtn.style.transform = 'rotate(360deg)';
+    if ($refreshBtn) $refreshBtn.style.transition = 'transform 0.6s ease-out';
+    try {
+      // 1. reload session list (drawer)
+      await loadSessions();
+      await loadRecentCwds();
+      // 2. if currently inside a session, pull its latest history.
+      //    Clear messages and re-render — anything live since last fetch
+      //    will come back via the WS subscription that's still active.
+      if (currentSessionId) {
+        clearMessages();
+        await fetchAndRenderHistory(currentSessionId);
+        showToast('已刷新 · 拉取最新历史', 'ok', 1800);
+      } else {
+        showToast('已刷新 session 列表', 'ok', 1500);
+      }
+    } catch (e) {
+      log('error', 'refresh failed: ' + (e && e.message || e));
+      showToast('刷新失败: ' + (e && e.message || e), 'error', 3000);
+    } finally {
+      if ($refreshBtn) setTimeout(() => { $refreshBtn.style.transform = ''; $refreshBtn.style.transition = ''; }, 700);
+    }
+  }
+  if ($refreshBtn) $refreshBtn.addEventListener('click', refreshNow);
 
   $openDrawer.addEventListener('click', openDrawer);
   $closeDrawer.addEventListener('click', closeDrawer);
