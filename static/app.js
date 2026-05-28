@@ -308,9 +308,10 @@
     b.className = 'banner info link-mode';
     const sid = currentLinkExternalSid ?? '';
     b.innerHTML =
-      `📎 <b>linked</b> — 此 session 的每个 turn 会自动 mirror 到 cmax session ` +
-      `<code>${sid.slice(0, 8)}</code>。 ` +
-      `<button type="button" class="link-unlink">✕ 取消 link</button>` +
+      `📎 <b>linked</b> — 每个 turn 自动 mirror 到 cmax ` +
+      `<code>${sid.slice(0, 8)}</code> (摘要, 不进 API context)。 ` +
+      `<button type="button" class="link-merge">🔗 合并整段到 CLI</button>` +
+      ` <button type="button" class="link-unlink">✕ 取消 link</button>` +
       ` <button class="x" type="button" aria-label="dismiss">✕</button>`;
     b.querySelector('.x').addEventListener('click', () => b.remove());
     const unlinkBtn = b.querySelector('.link-unlink');
@@ -322,6 +323,19 @@
         currentLinkExternalSid = null;
         applyFollowMode();
         showToast('已取消 mirror link', 'ok', 1500);
+      });
+    }
+    const mergeBtn = b.querySelector('.link-merge');
+    if (mergeBtn) {
+      mergeBtn.addEventListener('click', () => {
+        if (!currentSessionId || !currentLinkExternalSid) return;
+        if (!confirm('把此手机 session 的整段对话作为一条 user message 注入到 CLI session 的 queue？\n\n桌面 CLI 需要按 Enter 才会让 claude 真正消费它当作 context。')) return;
+        sendWS({
+          type: 'merge_to_external',
+          phoneSessionId: currentSessionId,
+          externalSessionId: currentLinkExternalSid,
+        });
+        showToast('合并请求已发送 · 见桌面 CLI', 'ok', 2200);
       });
     }
     $bannerRow.appendChild(b);
@@ -982,6 +996,15 @@
           } else {
             // Safety: clear any stale busy state from before disconnect.
             setBusy(false);
+            // No active turn replay happened — but if we landed on an
+            // existing session and the chat area is empty, pull history so
+            // the user doesn't see a blank screen. Without this the first
+            // connect renders nothing and the conversation only fills in
+            // after a manual refresh or some other trigger (the cause of
+            // the "刚开始的渲染有问题，重连后又恢复了" UX bug).
+            if (currentSessionId && $messages && !$messages.querySelector('.msg')) {
+              fetchAndRenderHistory(currentSessionId).catch(() => {});
+            }
           }
           // External-driver status for current session (drives follow-mode UI).
           currentExternal = m.external || null;

@@ -108,7 +108,10 @@ function sessionJsonlExistsSync(sessionId: string): boolean {
   return false;
 }
 
-async function findSessionFile(sessionId: string): Promise<string | null> {
+/** Locate the latest jsonl file for a sessionId across all PROJECT_ROOTS.
+ *  Exported so other modules (e.g. cmax-external/jsonl-writer.mergeFromPhoneSession)
+ *  can resolve a phone-owned session's path without re-implementing the walk. */
+export async function findSessionFile(sessionId: string): Promise<string | null> {
   let best: { path: string; mtime: number } | null = null;
   for (const root of PROJECT_ROOTS) {
     if (!existsSync(root)) continue;

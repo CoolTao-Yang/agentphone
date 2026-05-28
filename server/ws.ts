@@ -20,7 +20,8 @@ import type { AgentSettings, ClientMessage, ExternalSessionStatus, ServerMessage
 import { TurnRunner } from './runner.ts';
 import { defaultAgent, externalSessions, ownerOfSession } from './harness/registry.ts';
 import { watchJsonl, jsonlPathFor } from './harness/cmax-external/jsonl-watcher.ts';
-import { appendInjectUserMessage, appendMirrorEntry } from './harness/cmax-external/jsonl-writer.ts';
+import { appendInjectUserMessage, appendMirrorEntry, mergeFromPhoneSession } from './harness/cmax-external/jsonl-writer.ts';
+import { findSessionFile } from './harness/claude-sdk/adapter.ts';
 import { linkStore } from './store/links.ts';
 import { sendToAll as sendPushToAll } from './push.ts';
 
@@ -583,6 +584,39 @@ function createHandler(c: any, cfg: Cfg) {
           });
         } catch (err) {
           send({ type: 'error', message: 'link 失败: ' + (err instanceof Error ? err.message : String(err)) });
+        }
+        return;
+      }
+
+      // α-plus: collapse the phone session's whole transcript into a single
+      // user message and queue it in the external session's jsonl. desktop
+      // presses Enter to actually consume the merged context.
+      if (msg.type === 'merge_to_external') {
+        try {
+          const ext = externalSessions.get(msg.externalSessionId);
+          if (!ext) {
+            send({ type: 'error', message: '目标 cmax session 不在线' });
+            return;
+          }
+          const phonePath = await findSessionFile(msg.phoneSessionId);
+          if (!phonePath) {
+            send({ type: 'error', message: '找不到手机 session 的 jsonl 文件' });
+            return;
+          }
+          const externalPath = jsonlPathFor(ext.account, ext.cwd, msg.externalSessionId);
+          const result = await mergeFromPhoneSession(
+            externalPath,
+            msg.externalSessionId,
+            phonePath,
+            { phoneSessionLabel: msg.phoneSessionId.slice(0, 8), externalCwd: ext.cwd },
+          );
+          console.log(
+            `[ws] merged phone ${msg.phoneSessionId.slice(0, 8)} → cmax ${msg.externalSessionId.slice(0, 8)} ` +
+            `(${result.turnsMerged} turns, uuid=${result.uuid.slice(0, 8)})`,
+          );
+          send({ type: 'error', message: `已合并 ${result.turnsMerged} 轮到 CLI queue · 桌面按 Enter 才会让 claude 处理` });
+        } catch (err) {
+          send({ type: 'error', message: '合并失败: ' + (err instanceof Error ? err.message : String(err)) });
         }
         return;
       }

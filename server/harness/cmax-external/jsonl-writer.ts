@@ -17,6 +17,8 @@
 
 import { appendFile, readFile, stat } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
+import { createReadStream } from 'node:fs';
+import { createInterface } from 'node:readline';
 import type { ImageAttachment } from '../../../shared/types.ts';
 
 const VERSION_TAG = 'agentphone-3.0';
@@ -185,3 +187,110 @@ async function tailLastEntry(jsonlPath: string): Promise<RawEntry | null> {
 }
 
 export type _MirrorImagesUnused = ImageAttachment;  // satisfy types import lint
+
+// ── Merge: B's whole conversation → one user prompt injected into A ──
+
+/**
+ * Read every user/assistant turn from the phone-owned session's jsonl,
+ * format them into a single human-readable transcript block, and append
+ * that block as a single user message to the linked external (cmax)
+ * session's jsonl. cmax queues the message; the desktop user presses
+ * Enter to let claude.exe pick it up as the next API call's prompt —
+ * effectively splicing B's context into A's conversation.
+ *
+ * Returns the uuid of the injected entry + how many turns were merged.
+ */
+export async function mergeFromPhoneSession(
+  externalJsonlPath: string,
+  externalSessionId: string,
+  phoneJsonlPath: string,
+  opts: { phoneSessionLabel?: string; externalCwd?: string } = {},
+): Promise<{ uuid: string; turnsMerged: number }> {
+  const turns = await readPhoneTurns(phoneJsonlPath);
+  const label = opts.phoneSessionLabel || phoneSessionLabel(phoneJsonlPath);
+  const block = formatMergeBlock(turns, label);
+  const uuid = await appendInjectUserMessage(externalJsonlPath, externalSessionId, block, {
+    cwd: opts.externalCwd,
+    permissionMode: 'default',
+  });
+  return { uuid, turnsMerged: turns.length };
+}
+
+type PhoneTurn = { userText: string; assistantText: string };
+
+async function readPhoneTurns(path: string): Promise<PhoneTurn[]> {
+  const turns: PhoneTurn[] = [];
+  let stream;
+  try { stream = createReadStream(path, { encoding: 'utf8' }); }
+  catch { return turns; }
+  const rl = createInterface({ input: stream, crlfDelay: Infinity });
+  let pendingUser: string | null = null;
+  let pendingAssistant = '';
+  for await (const raw of rl) {
+    const line = raw.trim();
+    if (!line || line[0] !== '{') continue;
+    let entry: any;
+    try { entry = JSON.parse(line); } catch { continue; }
+
+    // user prompt
+    if (entry.type === 'user' && entry.message?.role === 'user') {
+      // flush previous pair if any
+      if (pendingUser !== null) {
+        turns.push({ userText: pendingUser, assistantText: pendingAssistant.trim() });
+      }
+      pendingUser = extractText(entry.message.content);
+      pendingAssistant = '';
+      continue;
+    }
+    // assistant reply (one entry per message; we concat text blocks)
+    if (entry.type === 'assistant' && entry.message?.role === 'assistant') {
+      pendingAssistant += extractText(entry.message.content);
+      continue;
+    }
+  }
+  // tail flush
+  if (pendingUser !== null) {
+    turns.push({ userText: pendingUser, assistantText: pendingAssistant.trim() });
+  }
+  // Drop empties (user msg with no body)
+  return turns.filter((t) => t.userText.trim().length > 0);
+}
+
+function extractText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  const parts: string[] = [];
+  for (const b of content as Array<Record<string, unknown>>) {
+    if (b && typeof b === 'object') {
+      if (b.type === 'text' && typeof b.text === 'string') parts.push(b.text);
+      else if (b.type === 'thinking') continue;  // skip thinking
+      // tool_use/tool_result deliberately omitted from merge — they bloat
+      // the context and aren't useful as conversation history.
+    }
+  }
+  return parts.join('\n');
+}
+
+function phoneSessionLabel(path: string): string {
+  const tail = path.split('/').pop() ?? '';
+  return tail.replace(/\.jsonl$/, '').slice(0, 8);
+}
+
+const MERGE_TURN_TRUNCATE = 4000;
+function truncateForMerge(s: string): string {
+  if (s.length <= MERGE_TURN_TRUNCATE) return s;
+  return s.slice(0, MERGE_TURN_TRUNCATE) + `\n[…${s.length - MERGE_TURN_TRUNCATE} chars truncated]`;
+}
+
+function formatMergeBlock(turns: PhoneTurn[], label: string): string {
+  if (turns.length === 0) {
+    return `📱 [merge from phone session ${label}] (no turns to merge)`;
+  }
+  const header = `📱 把手机 session ${label} 的 ${turns.length} 轮对话合并过来 — 请把它当作之前已经发生的上下文，继续这个话题。`;
+  const body = turns.map((t, i) => {
+    const u = truncateForMerge(t.userText.trim());
+    const a = truncateForMerge(t.assistantText.trim()) || '(no text response)';
+    return `── 轮 ${i + 1} ──\n[用户]\n${u}\n\n[助手]\n${a}`;
+  }).join('\n\n');
+  return `${header}\n\n${body}\n\n── 合并结束 ──`;
+}

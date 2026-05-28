@@ -35,7 +35,13 @@ export type ClientMessage =
   // CLI session, so each completed turn on the phone gets mirrored into
   // the external jsonl as a system entry. Pass null externalSessionId to
   // unlink.
-  | { type: 'set_link'; phoneSessionId: string; externalSessionId: string | null };
+  | { type: 'set_link'; phoneSessionId: string; externalSessionId: string | null }
+  // α-plus path: walk the phone-owned session's whole jsonl and dump a
+  // single condensed user message into the linked external session's
+  // jsonl. cmax queues it; user presses Enter to let claude.exe pick up
+  // B's context as A's next prompt. One-time merge — repeatable for
+  // additional turns but not auto.
+  | { type: 'merge_to_external'; phoneSessionId: string; externalSessionId: string };
 
 export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
