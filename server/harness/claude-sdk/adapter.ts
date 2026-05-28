@@ -3,7 +3,7 @@
 // we spawn the underlying claude.exe ourselves, no one else races for assistant
 // writes on these session jsonls.
 
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { readdir, readFile, stat, unlink } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -94,6 +94,20 @@ async function summarizeJsonl(path: string): Promise<{ preview: string; turns: n
   return { preview: preview.slice(0, 120) || '(空)', turns, cwd };
 }
 
+/** Synchronous variant — used from startTurn() which can't await. Returns
+ *  true if any project root contains a `<sessionId>.jsonl`. */
+function sessionJsonlExistsSync(sessionId: string): boolean {
+  for (const root of PROJECT_ROOTS) {
+    if (!existsSync(root)) continue;
+    let projs: string[];
+    try { projs = readdirSync(root); } catch { continue; }
+    for (const proj of projs) {
+      if (existsSync(join(root, proj, `${sessionId}.jsonl`))) return true;
+    }
+  }
+  return false;
+}
+
 async function findSessionFile(sessionId: string): Promise<string | null> {
   let best: { path: string; mtime: number } | null = null;
   for (const root of PROJECT_ROOTS) {
@@ -159,11 +173,25 @@ export class ClaudeSdkAdapter implements HarnessAdapter {
       })();
     }
 
+    // Validate resume id on disk. Without this, a ghost id from a previous
+    // turn that errored before writing any jsonl (e.g. ede_diagnostic) gets
+    // passed to claude.exe as --resume, and the SDK hangs forever trying to
+    // read a non-existent file. hapi does the same check in their
+    // claudeLocal.ts; we should have always done it.
+    let resumeId = opts.sessionId;
+    if (resumeId && !sessionJsonlExistsSync(resumeId)) {
+      console.warn(
+        `[claude-sdk] session ${resumeId.slice(0, 8)} not found on disk — ` +
+        `dropping --resume and starting fresh`,
+      );
+      resumeId = null;
+    }
+
     const q: Query = query({
       prompt: promptArg,
       options: {
         cwd: opts.cwd,
-        ...(opts.sessionId ? { resume: opts.sessionId } : {}),
+        ...(resumeId ? { resume: resumeId } : {}),
         ...(opts.effort ? { effort: opts.effort } : {}),
         permissionMode: 'default',
         canUseTool: claudeCanUseTool,

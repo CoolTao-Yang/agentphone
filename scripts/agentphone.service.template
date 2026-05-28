@@ -7,6 +7,15 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=__INSTALL_DIR__
 EnvironmentFile=-__HOME__/.config/agentphone/env
+# systemd user services don't inherit the interactive shell's HTTPS_PROXY,
+# so on networks that require a forward proxy (corp / VPN / Clash setup)
+# the claude.exe child's api_bootstrap_fetch silently fails and the SDK
+# hangs forever. If you need a proxy, drop a line into
+# ~/.config/agentphone/env like:
+#     HTTPS_PROXY=http://127.0.0.1:7897
+#     HTTP_PROXY=http://127.0.0.1:7897
+#     NO_PROXY=localhost,127.0.0.1,10.*,172.16.*,...
+# EnvironmentFile= above picks them up before ExecStart runs.
 # Source nvm.sh directly so the systemd (non-interactive, minimal PATH)
 # environment can find node/npm. `bash -lc` is not enough because -l
 # sources only ~/.profile, and most setups put nvm init in ~/.bashrc.
