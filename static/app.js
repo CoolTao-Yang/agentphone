@@ -1361,12 +1361,19 @@
   }
 
   function startNewSession(cwd) {
-    console.log('[+ 新建] startNewSession cwd=', cwd, 'ws.readyState=', ws?.readyState);
     const ok = sendWS({ type: 'select_session', sessionId: null, cwd });
-    console.log('[+ 新建] sendWS returned', ok);
+    log('info', `+ 新建 → cwd=${cwd} sendWS=${ok}`);
     clearMessages();
     currentSessionId = null;
     setCwdDisplay(cwd);
+    // CRITICAL UX: close the drawer so the user actually SEES the empty
+    // chat area + active input. Without this, the drawer stays open over
+    // the now-cleared chat, and the user thinks nothing happened ("没出现
+    // 新 session 选项") because they're still looking at the session list.
+    closeDrawer();
+    showToast('新 session ready · 输入消息开始', 'ok', 2000);
+    // Focus the composer so the user can type immediately.
+    setTimeout(() => { try { $input?.focus(); } catch {} }, 100);
   }
 
   function clearMessages() {
@@ -1396,9 +1403,8 @@
 
   // ─── new session modal ────────────────────────────────────────
   function openNewSessionModal() {
-    console.log('[+ 新建] openNewSessionModal clicked, currentCwd=', currentCwd, 'defaultCwd=', defaultCwd);
     if (!$newModal) {
-      console.error('[+ 新建] $newModal not found in DOM');
+      log('error', '+ 新建: $newModal not found');
       return;
     }
     $nsName.value = '';
