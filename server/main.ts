@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
-import { existsSync, readdirSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { networkInterfaces, homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { createNodeWebSocket } from '@hono/node-ws';
@@ -9,7 +9,55 @@ import { Hono } from 'hono';
 import { mountWebSocket } from './ws.ts';
 import { mountSessionApi } from './sessions.ts';
 
-const TOKEN = process.env.PHONE_AGENT_TOKEN || randomBytes(8).toString('hex');
+// Token resolution order:
+//   1. PHONE_AGENT_TOKEN env var (caller overrides everything)
+//   2. PHONE_AGENT_TOKEN line in ~/.config/agentphone/env (persistent)
+//   3. random — generated AND written back to the env file so the next
+//      restart reuses it. This keeps the phone's bookmark URL stable.
+const ENV_FILE = join(homedir(), '.config', 'agentphone', 'env');
+
+function readTokenFromEnvFile(): string | null {
+  try {
+    const txt = readFileSync(ENV_FILE, 'utf-8');
+    const m = txt.match(/^PHONE_AGENT_TOKEN=(.+)$/m);
+    const v = m?.[1]?.trim();
+    return v && v.length > 0 ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+function persistTokenToEnvFile(token: string): void {
+  try {
+    mkdirSync(dirname(ENV_FILE), { recursive: true });
+    let content = '';
+    try { content = readFileSync(ENV_FILE, 'utf-8'); } catch { /* new file */ }
+    if (/^PHONE_AGENT_TOKEN=/m.test(content)) {
+      content = content.replace(/^PHONE_AGENT_TOKEN=.*$/m, `PHONE_AGENT_TOKEN=${token}`);
+    } else {
+      if (content && !content.endsWith('\n')) content += '\n';
+      content += `PHONE_AGENT_TOKEN=${token}\n`;
+    }
+    writeFileSync(ENV_FILE, content, 'utf-8');
+    try { chmodSync(ENV_FILE, 0o600); } catch { /* best effort */ }
+  } catch (e) {
+    console.warn('warn: could not persist token to env file:', e);
+  }
+}
+
+let TOKEN_SOURCE: 'env' | 'file' | 'generated' = 'env';
+let TOKEN = process.env.PHONE_AGENT_TOKEN || '';
+if (!TOKEN) {
+  const fromFile = readTokenFromEnvFile();
+  if (fromFile) {
+    TOKEN = fromFile;
+    TOKEN_SOURCE = 'file';
+  } else {
+    TOKEN = randomBytes(8).toString('hex');
+    persistTokenToEnvFile(TOKEN);
+    TOKEN_SOURCE = 'generated';
+  }
+}
 const PORT = Number(process.env.PORT || 8765);
 const HOST = process.env.HOST || '0.0.0.0';
 const DEFAULT_CWD = process.env.PHONE_AGENT_CWD || process.cwd();
@@ -43,6 +91,12 @@ const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
 mountSessionApi(app, TOKEN);
 mountWebSocket(app, upgradeWebSocket, { TOKEN, DEFAULT_CWD });
 
+// Stable bookmark target — phone bookmarks this single URL forever,
+// and we 302 it to the chat UI with the current token attached.
+// Open access on purpose: anyone who can reach the server (i.e. is on
+// your tailnet) is trusted enough to receive the token.
+app.get('/launch', (c) => c.redirect(`/?token=${encodeURIComponent(TOKEN)}`, 302));
+
 app.use('/*', serveStatic({ root: './static' }));
 
 const server = serve({ fetch: app.fetch, port: PORT, hostname: HOST }, (info) => {
@@ -56,6 +110,11 @@ const server = serve({ fetch: app.fetch, port: PORT, hostname: HOST }, (info) =>
     ? CLAUDE_CONFIG_DIR.replace(/\/+$/, '').split('/').pop() || '(custom)'
     : '(default ~/.claude/)';
 
+  const tokenNote =
+    TOKEN_SOURCE === 'env' ? '(from env)' :
+    TOKEN_SOURCE === 'file' ? `(persisted at ${ENV_FILE})` :
+    `(generated → saved to ${ENV_FILE})`;
+
   console.log('═══════════════════════════════════════════════════');
   console.log(`📱  agentphone server on :${info.port}`);
   console.log(`📂  default cwd:    ${DEFAULT_CWD}`);
@@ -68,14 +127,15 @@ const server = serve({ fetch: app.fetch, port: PORT, hostname: HOST }, (info) =>
   } else {
     console.log(`    ⚠ no accounts found under ~/.claude-accounts/ — using default ~/.claude/`);
   }
-  console.log(`🔑  token:          ${TOKEN}`);
+  console.log(`🔑  token:          ${TOKEN} ${tokenNote}`);
   console.log('');
-  console.log('Open on phone (Chrome → Add to Home Screen):');
-  if (tsIPs.length) {
-    for (const ip of tsIPs) console.log(`   http://${ip}:${info.port}/?token=${TOKEN}`);
-  } else {
-    console.log(`   http://<your-tailscale-ip>:${info.port}/?token=${TOKEN}`);
-  }
+  const ips = tsIPs.length ? tsIPs : ['<your-tailscale-ip>'];
+  console.log('Bookmark this on your phone (Chrome → Add to Home Screen).');
+  console.log('It auto-redirects with the current token so it never goes stale:');
+  for (const ip of ips) console.log(`   http://${ip}:${info.port}/launch`);
+  console.log('');
+  console.log('First-time / shareable direct link:');
+  for (const ip of ips) console.log(`   http://${ip}:${info.port}/?token=${TOKEN}`);
   console.log('═══════════════════════════════════════════════════');
 });
 injectWebSocket(server);

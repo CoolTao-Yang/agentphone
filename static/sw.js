@@ -32,8 +32,10 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
-  // Never intercept WS or API requests.
-  if (url.pathname.startsWith('/ws') || url.pathname.startsWith('/api/')) return;
+  // Never intercept WS, API, or /launch (the latter is a 302 redirect we
+  // want to hit the server every time so the token stays fresh).
+  if (url.pathname.startsWith('/ws') || url.pathname.startsWith('/api/') ||
+      url.pathname === '/launch') return;
 
   // Static GET: network-first with cache fallback for shell pages; cache-first
   // for everything else so cold loads are fast.

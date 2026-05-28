@@ -45,25 +45,26 @@ npm install
 npm start
 ```
 
-The server prints something like:
+The server prints two URLs:
 
 ```
-═══════════════════════════════════════════════════
-📱  agentphone server on :8765
-📂  default cwd: /home/yzt/test/agentphone
-🔑  token:       a8c4f97d92e0b1c4
+Bookmark this on your phone (Chrome → Add to Home Screen).
+It auto-redirects with the current token so it never goes stale:
+   http://100.119.115.75:8765/launch
 
-Open on phone (Chrome → Add to Home Screen):
+First-time / shareable direct link:
    http://100.119.115.75:8765/?token=a8c4f97d92e0b1c4
-═══════════════════════════════════════════════════
 ```
 
-Open that URL in Chrome on the phone (with Tailscale running on the phone).
-You should see the chat UI. Send a message; you're talking to the Claude Code
-SDK running on this machine.
+**Bookmark `/launch` once and you're done forever** — it always 302s to
+`/?token=<current>`. Even if the token rotates, the bookmark keeps working.
 
-To "install" as an app: Chrome menu → **Add to Home Screen**. Manifest +
-service worker are in place, so it becomes a standalone icon.
+The token itself is persisted on first generation to
+`~/.config/agentphone/env` (chmod 600), so restarts don't change it
+either. The two layers stack: stable token + stable bookmark URL.
+
+To "install" as an app on the phone: Chrome menu → **Add to Home Screen**.
+Manifest + service worker are in place, so it becomes a standalone icon.
 
 ## Configuration
 
