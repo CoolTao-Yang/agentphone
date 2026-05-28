@@ -31,13 +31,29 @@ if [[ ! -f "$CONFIG_DIR/env" ]]; then
   else
     TOKEN="$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
   fi
+
+  # If user has multiple Claude accounts under ~/.claude-accounts/, default to
+  # the first one we find — they can edit env to switch.
+  DEFAULT_CCD=""
+  if [[ -d "$HOME/.claude-accounts" ]]; then
+    for cand in "$HOME/.claude-accounts/cmax" "$HOME/.claude-accounts"/*; do
+      [[ -d "$cand" ]] && DEFAULT_CCD="$cand" && break
+    done
+  fi
+
   cat > "$CONFIG_DIR/env" <<EOF
 PHONE_AGENT_TOKEN=$TOKEN
 PORT=8765
-# PHONE_AGENT_CWD=/home/$USER_NAME/somewhere   # uncomment to pin default cwd
+# Pin a working dir for new sessions (otherwise = whichever dir agentphone runs in):
+# PHONE_AGENT_CWD=/home/$USER_NAME/somewhere
+
+# Which Claude account agentphone drives (multi-account / shared-session setups).
+# Comment out to use the default ~/.claude/ account.
+${DEFAULT_CCD:+CLAUDE_CONFIG_DIR=$DEFAULT_CCD}
 EOF
   chmod 600 "$CONFIG_DIR/env"
   echo "✓ generated $CONFIG_DIR/env (chmod 600)"
+  [[ -n "$DEFAULT_CCD" ]] && echo "  → defaulting CLAUDE_CONFIG_DIR=$DEFAULT_CCD (edit to change account)"
 else
   echo "→ keeping existing $CONFIG_DIR/env"
 fi

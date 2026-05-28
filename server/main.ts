@@ -11,6 +11,10 @@ const TOKEN = process.env.PHONE_AGENT_TOKEN || randomBytes(8).toString('hex');
 const PORT = Number(process.env.PORT || 8765);
 const HOST = process.env.HOST || '0.0.0.0';
 const DEFAULT_CWD = process.env.PHONE_AGENT_CWD || process.cwd();
+// Claude is account-scoped via CLAUDE_CONFIG_DIR. The SDK spawns the claude
+// binary which inherits this from our environment. We surface it explicitly
+// so the user can see which account agentphone is driving.
+const CLAUDE_CONFIG_DIR = process.env.CLAUDE_CONFIG_DIR || '';
 
 const app = new Hono();
 const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
@@ -27,10 +31,22 @@ const server = serve({ fetch: app.fetch, port: PORT, hostname: HOST }, (info) =>
       if (i.family === 'IPv4' && /^100\./.test(i.address)) tsIPs.push(i.address);
     }
   }
+  // Derive a friendly account name (last segment of the config dir)
+  const account = CLAUDE_CONFIG_DIR
+    ? CLAUDE_CONFIG_DIR.replace(/\/+$/, '').split('/').pop() || '(custom)'
+    : '(default ~/.claude/)';
+
   console.log('═══════════════════════════════════════════════════');
   console.log(`📱  agentphone server on :${info.port}`);
-  console.log(`📂  default cwd: ${DEFAULT_CWD}`);
-  console.log(`🔑  token:       ${TOKEN}`);
+  console.log(`📂  default cwd:    ${DEFAULT_CWD}`);
+  console.log(`🤖  claude account: ${account}`);
+  if (CLAUDE_CONFIG_DIR) {
+    console.log(`    └── CLAUDE_CONFIG_DIR=${CLAUDE_CONFIG_DIR}`);
+  } else {
+    console.log(`    ⚠ CLAUDE_CONFIG_DIR not set — using default ~/.claude/`);
+    console.log(`      To pin an account: export CLAUDE_CONFIG_DIR=~/.claude-accounts/<name>`);
+  }
+  console.log(`🔑  token:          ${TOKEN}`);
   console.log('');
   console.log('Open on phone (Chrome → Add to Home Screen):');
   if (tsIPs.length) {

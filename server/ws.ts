@@ -14,6 +14,12 @@ type WSLike = { send(data: string): void; close(code?: number, reason?: string):
 
 type Cfg = { TOKEN: string; DEFAULT_CWD: string };
 
+function deriveAccountName(): string {
+  const ccd = process.env.CLAUDE_CONFIG_DIR;
+  if (!ccd) return '(default)';
+  return ccd.replace(/\/+$/, '').split('/').pop() || '(custom)';
+}
+
 export function mountWebSocket(
   app: Hono,
   upgradeWebSocket: (handlerFactory: (c: any) => any) => any,
@@ -60,6 +66,7 @@ function createHandler(c: any, cfg: Cfg) {
         defaultCwd: cfg.DEFAULT_CWD,
         currentCwd,
         currentSessionId,
+        claudeAccount: deriveAccountName(),
       });
     },
 

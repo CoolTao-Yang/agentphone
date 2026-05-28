@@ -75,6 +75,32 @@ Environment variables (read on startup):
 | `HOST`              | `0.0.0.0`          | bind address                                  |
 | `PHONE_AGENT_TOKEN` | random 16‑char hex | URL token required to connect                 |
 | `PHONE_AGENT_CWD`   | `process.cwd()`    | default working directory for new sessions    |
+| `CLAUDE_CONFIG_DIR` | unset → `~/.claude/` | which Claude account to drive (see below)  |
+
+### Multi-account Claude setups
+
+If you run multiple Claude accounts isolated via `CLAUDE_CONFIG_DIR` (e.g.,
+`~/.claude-accounts/<name>/`), set it before starting:
+
+```bash
+CLAUDE_CONFIG_DIR=~/.claude-accounts/cmax npm start
+```
+
+The server prints which account it's driving at startup, and the phone PWA
+shows a small badge next to the brand:
+
+```
+agent​phone  [cmax]   · /home/yzt/test/foo
+```
+
+Sessions are usually shared across accounts via `~/.claude-shared/projects/`,
+so the drawer lists everything regardless of which account is active. The
+account choice mostly affects usage billing and which `.claude.json` /
+plugin set the agent loads.
+
+When installed via `install-autostart.sh`, the env file at
+`~/.config/agentphone/env` auto-defaults to the first account it finds
+under `~/.claude-accounts/` (prefers `cmax` if present).
 
 Pin a token (so the bookmark stays stable across restarts):
 

@@ -13,7 +13,7 @@ export type ClientMessage =
 // WebSocket: server → client
 // ────────────────────────────────────────────────────────────────
 export type ServerMessage =
-  | { type: 'connected'; defaultCwd: string; currentCwd: string; currentSessionId: string | null }
+  | { type: 'connected'; defaultCwd: string; currentCwd: string; currentSessionId: string | null; claudeAccount: string }
   | { type: 'unauthorized' }
   | { type: 'session_set'; sessionId: string | null; cwd: string }
   | { type: 'agent_event'; event: AgentEvent }

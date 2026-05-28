@@ -102,6 +102,17 @@ header {
   text-overflow: ellipsis;
   direction: rtl;     /* show end of long paths */
 }
+.h-acct {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--accent-2);
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: rgba(217, 119, 6, 0.08);
+}
+.h-acct:empty { display: none; }
 .h-status {
   display: inline-flex; align-items: center; gap: 6px;
   font-family: var(--mono); font-size: 11px;

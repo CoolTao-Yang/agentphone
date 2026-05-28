@@ -31,6 +31,7 @@
   const $dot        = document.getElementById('status-dot');
   const $statusText = document.getElementById('status-text');
   const $hCwd       = document.getElementById('h-cwd');
+  const $hAcct      = document.getElementById('h-acct');
   const $toast      = document.getElementById('toast');
 
   // drawer + modals
@@ -133,6 +134,16 @@
     currentCwd = cwd || '';
     $hCwd.textContent = currentCwd ? '· ' + currentCwd : '';
     $hCwd.title = currentCwd;
+  }
+
+  function setAccountDisplay(name) {
+    if (!name || name === '(default)') {
+      $hAcct.textContent = '';
+      $hAcct.title = '';
+    } else {
+      $hAcct.textContent = name;
+      $hAcct.title = `claude account: ${name}`;
+    }
   }
 
   // ─── streaming text blocks ────────────────────────────────────
@@ -463,8 +474,9 @@
         case 'connected':
           defaultCwd = m.defaultCwd;
           setCwdDisplay(m.currentCwd);
+          setAccountDisplay(m.claudeAccount);
           currentSessionId = m.currentSessionId;
-          log('ok', 'connected, cwd=' + m.currentCwd);
+          log('ok', `connected, account=${m.claudeAccount}, cwd=${m.currentCwd}`);
           // load sessions in background
           loadSessions();
           loadRecentCwds();
