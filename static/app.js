@@ -598,7 +598,25 @@
     return true;
   }
 
-  function connect() {
+  // Track when we last heard *anything* from the server. Heartbeat ping
+  // counts as activity. If we go 65s with no message at all, the WS is
+  // effectively dead even if it shows readyState=OPEN — force reconnect.
+  let lastServerActivityAt = Date.now();
+  let serverWatchdog = null;
+  function armServerWatchdog() {
+    if (serverWatchdog) clearInterval(serverWatchdog);
+    serverWatchdog = setInterval(() => {
+      if (!ws || ws.readyState !== 1) return;
+      const since = Date.now() - lastServerActivityAt;
+      if (since > 65_000) {
+        log('warn', 'server silent for ' + Math.round(since/1000) + 's — force reconnect');
+        connect('watchdog');
+      }
+    }, 10_000);
+  }
+  armServerWatchdog();
+
+  function connect(reason) {
     // Forcibly close any previous socket BEFORE creating a new one. Without
     // this the previous WS' onmessage handler stays alive and processes
     // events in parallel with the new connection — each event ends up
@@ -615,7 +633,7 @@
     }
 
     setStatus('', '连接中');
-    log('info', 'ws connecting');
+    log('info', 'ws connecting (reason=' + (reason || 'initial') + ')');
     let myWs;
     try {
       myWs = new WebSocket(WS_URL);
@@ -1452,7 +1470,7 @@
       try { ws && ws.close(); } catch {}
       ws = null;
       reconnectAttempts = 0;
-      connect();
+      connect('pageshow');
     }
   });
   // Network coming back online → also reconnect.

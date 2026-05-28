@@ -77,8 +77,33 @@ function createHandler(c: any, cfg: Cfg) {
   const tokenOk = c.req.query('token') === cfg.TOKEN;
   let ws: WSLike | null = null;
   let unsubscribe: (() => void) | null = null;
+  let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  let lastPongAt = Date.now();
 
   const send = (msg: ServerMessage) => { if (ws) ws.send(JSON.stringify(msg)); };
+
+  const PING_INTERVAL_MS = 25_000;
+  const PONG_TIMEOUT_MS  = 60_000;
+
+  function startHeartbeat() {
+    stopHeartbeat();
+    lastPongAt = Date.now();
+    heartbeatTimer = setInterval(() => {
+      if (!ws) return;
+      const sinceLastPong = Date.now() - lastPongAt;
+      if (sinceLastPong > PONG_TIMEOUT_MS) {
+        // Client is gone / frozen — drop the connection so the client's
+        // reconnect machinery (visibilitychange / online / setTimeout)
+        // can take over with a fresh socket.
+        try { ws.close(4002, 'pong timeout'); } catch { /* ignore */ }
+        return;
+      }
+      send({ type: 'ping', ts: Date.now() });
+    }, PING_INTERVAL_MS);
+  }
+  function stopHeartbeat() {
+    if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+  }
 
   return {
     onOpen(_evt: any, w: WSLike) {
@@ -88,6 +113,7 @@ function createHandler(c: any, cfg: Cfg) {
         w.close(4001, 'unauthorized');
         return;
       }
+      startHeartbeat();
 
       const r = getRunner();
 
@@ -182,6 +208,11 @@ function createHandler(c: any, cfg: Cfg) {
         return;
       }
 
+      if (msg.type === 'pong') {
+        lastPongAt = Date.now();
+        return;
+      }
+
       if (msg.type === 'set_settings') {
         if (typeof msg.autoApproveTools === 'boolean') {
           agentSettings.autoApproveTools = msg.autoApproveTools;
@@ -231,6 +262,7 @@ function createHandler(c: any, cfg: Cfg) {
       // CRITICAL: do NOT interrupt the runner — the turn keeps running so
       // the next reconnect can replay all events.
       if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+      stopHeartbeat();
       ws = null;
     },
   };

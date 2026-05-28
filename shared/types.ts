@@ -9,7 +9,8 @@ export type ClientMessage =
   | { type: 'select_session'; sessionId: string | null; cwd?: string }
   | { type: 'tool_response'; toolUseId: string; decision: 'allow' | 'deny'; allowRestOfTurn?: boolean }
   | { type: 'set_settings'; autoApproveTools?: boolean; effort?: EffortLevel; perToolAuto?: Record<string, boolean> }
-  | { type: 'log'; level: 'info' | 'warn' | 'error' | 'ok'; message: string; ts?: number };
+  | { type: 'log'; level: 'info' | 'warn' | 'error' | 'ok'; message: string; ts?: number }
+  | { type: 'pong'; ts: number };
 
 export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
@@ -43,6 +44,7 @@ export type ServerMessage =
       settings: AgentSettings;
     }
   | { type: 'settings'; settings: AgentSettings }
+  | { type: 'ping'; ts: number }
   | { type: 'unauthorized' }
   | { type: 'session_set'; sessionId: string | null; cwd: string }
   | { type: 'agent_event'; event: AgentEvent }

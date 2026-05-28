@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>agentphone · render preview</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11/styles/atom-one-dark.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11/highlight.min.js"></script>
+  <style>
+    /* Desktop layout that wraps a phone-sized rendering of the chat,
+       side-by-side with the markdown source. Use this on a laptop to
+       iterate on rendering without bouncing screenshots from the phone. */
+    html, body { margin: 0; padding: 0; background: #16140f; color: var(--text); }
+    .toolbar {
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 14px;
+      background: #0d0c0b;
+      border-bottom: 1px solid var(--border);
+      font-family: var(--mono);
+      font-size: 12.5px;
+      color: var(--muted);
+    }
+    .toolbar select, .toolbar button {
+      background: #1a1815;
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 4px 8px;
+      font-family: inherit;
+      font-size: inherit;
+      cursor: pointer;
+    }
+    .toolbar button.primary {
+      background: var(--accent);
+      color: #1a0f00;
+      border-color: var(--accent);
+      font-weight: 700;
+    }
+    .toolbar .info { margin-left: auto; }
+
+    .pane {
+      display: grid;
+      grid-template-columns: 1fr 420px 1fr;
+      gap: 16px;
+      padding: 16px;
+      height: calc(100vh - 50px);
+      box-sizing: border-box;
+    }
+
+    .col h3 {
+      margin: 0 0 8px;
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .col.source, .col.html {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+    .col.source textarea {
+      flex: 1;
+      background: #0d0c0b;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 12.5px;
+      padding: 10px 12px;
+      resize: none;
+      outline: none;
+      line-height: 1.55;
+    }
+    .col.source textarea:focus { border-color: var(--accent); }
+    .col.html pre {
+      flex: 1;
+      margin: 0;
+      background: #0d0c0b;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px 12px;
+      overflow: auto;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 11.5px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    /* Phone frame in the middle — mimics the message area of the real
+       PWA, with the same width as a typical Android phone. */
+    .col.phone {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .col.phone .phone-frame {
+      width: 390px;
+      max-width: 100%;
+      flex: 1;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 28px;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.4);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+    .col.phone .phone-head {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border);
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--muted);
+      letter-spacing: 0.04em;
+    }
+    .col.phone .phone-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 14px 14px 24px;
+    }
+    .col.phone .phone-foot {
+      padding: 12px 14px;
+      border-top: 1px solid var(--border);
+      font-family: var(--mono);
+      font-size: 10.5px;
+      color: var(--muted-2);
+      letter-spacing: 0.04em;
+    }
+
+    @media (max-width: 1100px) {
+      .pane { grid-template-columns: 1fr; height: auto; }
+      .col.source textarea, .col.html pre { height: 320px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <span><b style="color:var(--text)">agentphone</b> · render preview</span>
+    <select id="sample">
+      <option value="">— sample —</option>
+      <option value="prose">long prose</option>
+      <option value="bullets">bullets w/ inline bold + code</option>
+      <option value="table">4-col table (the problem case)</option>
+      <option value="code">code block (TypeScript)</option>
+      <option value="mixed">mixed: heading + bullet + code + table</option>
+      <option value="diagram">ASCII diagram (architecture)</option>
+      <option value="chinese-prose">long Chinese prose</option>
+      <option value="optim-list">optimization list (the buggy v4 output)</option>
+    </select>
+    <button id="render" class="primary">Render ↻</button>
+    <span class="info" id="info"></span>
+  </div>
+
+  <div class="pane">
+    <div class="col source">
+      <h3>Markdown source</h3>
+      <textarea id="src" spellcheck="false"></textarea>
+    </div>
+
+    <div class="col phone">
+      <h3>Phone-width preview (390px)</h3>
+      <div class="phone-frame">
+        <div class="phone-head">claude · cmax</div>
+        <div class="phone-body" id="phone">
+          <div class="msg assistant">
+            <div class="who">claude</div>
+            <div class="body" id="out"><em style="color:var(--muted)">paste markdown on the left → click Render</em></div>
+          </div>
+        </div>
+        <div class="phone-foot">↑ same .body / .msg / .table-wrap classes as live app</div>
+      </div>
+    </div>
+
+    <div class="col html">
+      <h3>Generated HTML (for grep / inspection)</h3>
+      <pre id="html"></pre>
+    </div>
+  </div>
+
+  <script>
+  // Mirror of the renderMarkdown function in app.js so visuals stay in sync.
+  // Keep these two in sync when one changes.
+  function renderMarkdown(text) {
+    if (!window.marked) return text;
+    let html = window.marked.parse(text, { gfm: true, breaks: false, async: false });
+    html = html.replace(/<table>/g, '<div class="table-wrap"><table>')
+               .replace(/<\/table>/g, '</table></div>');
+    html = html.replace(/<pre>/g, '<pre><button type="button" class="pre-copy" aria-label="复制">📋</button>');
+    return html;
+  }
+
+  const SAMPLES = {
+    prose: `## React vs Vue 简单对比
+
+React 起源于 Facebook 内部需求，2013 年开源。最大特点是组件化思想和 JSX 语法的引入。每次状态变化触发整棵组件树的重新评估，再通过虚拟 DOM diff 找出最小变更应用到真实 DOM。这一套思路在 hooks 出现之前主要靠 class 写。
+
+Vue 则是 Evan You 在 Google 工作期间个人项目，受 Angular 启发但更轻量。响应式系统基于 Object.defineProperty (Vue 2) 或 Proxy (Vue 3)，模板语法接近原生 HTML，渐进式可以从 jQuery 项目逐步迁移。
+
+性能层面两者在同等规模下接近，差异主要体现在心智模型：React 偏函数式、显式；Vue 偏声明式、约定大于配置。`,
+
+    bullets: `### P0 一线改进
+
+- **#1 图片历史回放** — session.jsonl 存了图片但 \`/api/sessions/:id/messages\` 端点只提取了 text；改成保留 image blocks → frontend renderHistorical 也渲染缩略图。**(30 min)**
+- **#2 Code block 一键复制** — 手机选中复制极痛苦；每个 \`<pre>\` 右上角加 📋 按钮，调 \`clipboard.writeText\`。**(30 min)**
+- **#3 长回复 markdown 重渲染慢** — 每个 token delta 都 re-parse 整段（包括代码高亮）；parse 节流到 200ms + 在 \`block_end\` 才跑 hljs。**(1h)**
+- **#4 多 turn 并行跑不动** — TurnRunner 是单例；改成按 sessionId 索引的 runner map。**(2h)**`,
+
+    table: `## P0 一线改进
+
+| # | 痛点 | 改进 | 工时 |
+|---|---|---|---|
+| 1 | 图片在历史回放里**消失**——session.jsonl 存了，但 \`/api/sessions/:id/messages\` 端点只提取了 text | 历史 endpoint 保留 image blocks → frontend renderHistorical 也渲染缩略图 | 30min |
+| 2 | **Code block 不能一键复制**——手机选中复制极痛苦 | 每个 \`<pre>\` 右上角加 📋 按钮，clipboard.writeText | 30min |
+| 3 | **长回复 markdown 重渲染慢**——每个 token delta 都 re-parse 整段（包括代码高亮） | parse 节流到 200ms + 在 block_end 才跑 hljs，期间只显示原始文本 | 1h |
+`,
+
+    code: `这是一个简单的 fibonacci 实现：
+
+\`\`\`typescript
+function fib(n: number): number {
+  if (n < 2) return n;
+  let a = 0, b = 1;
+  for (let i = 2; i <= n; i++) {
+    const t = a + b;
+    a = b;
+    b = t;
+  }
+  return b;
+}
+
+console.log(fib(50)); // 12586269025
+\`\`\`
+
+记忆化版本（O(1) 空间）：
+
+\`\`\`typescript
+const memo = new Map<number, number>();
+function fibMemo(n: number): number {
+  if (n < 2) return n;
+  const cached = memo.get(n);
+  if (cached !== undefined) return cached;
+  const r = fibMemo(n - 1) + fibMemo(n - 2);
+  memo.set(n, r);
+  return r;
+}
+\`\`\``,
+
+    mixed: `# 部署架构
+
+整体结构如下：
+
+\`\`\`
+[Phone] → Tailscale → [WSL: Node] → Claude Agent SDK
+\`\`\`
+
+## 关键决策
+
+1. **Tailscale 隧道** — 不开公网端口，端到端加密
+2. **TurnRunner** — 解耦 turn 执行和 WS 生命周期
+3. **PWA + Service Worker** — 离线 shell
+
+数字对比：
+
+| 组件 | 行数 | 测试 |
+|---|---|---|
+| server | 612 | 0 |
+| static | 1800+ | 0 |
+
+代码片段：
+
+\`\`\`typescript
+const runner = new TurnRunner(agent);
+runner.subscribe((event) => ws.send(JSON.stringify(event)));
+\`\`\`
+
+更多见 [README](https://github.com/CoolTao-Yang/agentphone).`,
+
+    diagram: `\`\`\`
+┌─────────────────────────────┐
+│  agentphone.apk             │
+│  ┌───────────────────────┐  │
+│  │ Capacitor WebView     │  │
+│  │   ↓ 加载              │  │
+│  │ http://100.119.115.75 │  │
+│  │   :8765/launch        │  │
+│  └───────────────────────┘  │
+└─────────────────────────────┘
+        ↓ Tailscale 隧道
+   你的 WSL agentphone server
+\`\`\``,
+
+    'chinese-prose': `分布式系统里的 CAP 定理常被误读。它说的不是"三个里只能选两个"，而是在网络分区已经发生的瞬间，你必须在一致性和可用性之间做权衡。换句话说，P 不是"可以放弃"的选项——只要你在真实网络上跑，分区就一定会发生，问题只是它出现的频率和时长。
+
+工程上更有用的视角是 PACELC：当网络正常时（Else），你也要在 latency 和一致性之间选；不是只有分区时才有取舍。这解释了为什么很多号称强一致的系统，在没有分区的常态下也会主动放松一致性来换吞吐。
+
+实践中绝大多数业务并不需要严格的线性一致性。会话一致性、单调读、读自己写——这几条在用户感知层已经够了。`,
+
+    'optim-list': `## P0 一线改进
+
+### #1 · 图片历史回放（30 min）
+
+session.jsonl 已经保留了图片 base64，但 \`/api/sessions/:id/messages\` 端点只抽 text、不抽 image。改成保留 image blocks，前端 \`renderHistoricalAssistant\` 也渲染缩略图。
+
+### #2 · Code block 一键复制（30 min）
+
+手机上选中代码块复制极痛苦。给每个 \`<pre>\` 右上角加一个 📋 按钮，点击调 \`clipboard.writeText\`。
+
+### #3 · Markdown re-parse 节流（1h）
+
+每收到一个 token delta 就 re-parse 整段 markdown（包括 hljs 代码高亮），长回复明显卡。改成 200ms 节流 + 只在 \`block_end\` 跑 hljs，期间显示原始文本。
+
+### #4 · 多 turn 并行（2h）
+
+TurnRunner 是单例，A 还在跑就不能开 B。改成按 sessionId 索引的 runner map，不同 session 并发跑。`,
+  };
+
+  const $src = document.getElementById('src');
+  const $out = document.getElementById('out');
+  const $html = document.getElementById('html');
+  const $info = document.getElementById('info');
+  const $sample = document.getElementById('sample');
+  const $btn = document.getElementById('render');
+
+  function render() {
+    const text = $src.value;
+    const html = renderMarkdown(text);
+    $out.innerHTML = html;
+    $html.textContent = html;
+    if (window.hljs) {
+      $out.querySelectorAll('pre code:not(.hljs)').forEach((el) => {
+        try { window.hljs.highlightElement(el); } catch (e) {}
+      });
+    }
+    $info.textContent = `src ${text.length}c · html ${html.length}c · ${$out.querySelectorAll('p, li, pre, table').length} blocks`;
+  }
+
+  $btn.addEventListener('click', render);
+  $src.addEventListener('input', render);
+  $sample.addEventListener('change', () => {
+    const k = $sample.value;
+    if (k && SAMPLES[k]) {
+      $src.value = SAMPLES[k];
+      render();
+    }
+  });
+
+  // Boot with the table sample so the page shows something useful immediately.
+  $src.value = SAMPLES.table;
+  // Wait for marked to load
+  function tryRender() {
+    if (window.marked) { render(); }
+    else setTimeout(tryRender, 50);
+  }
+  tryRender();
+  </script>
+</body>
+</html>
