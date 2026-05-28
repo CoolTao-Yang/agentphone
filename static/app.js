@@ -1875,14 +1875,85 @@
   }
   function maybeAskNotifyPermission() {
     if (!('Notification' in window)) return;
-    if (Notification.permission === 'granted') notifyOnDone = true;
+    if (Notification.permission === 'granted') {
+      notifyOnDone = true;
+      // Also (re-)subscribe to push so background turn_done fires lock-screen
+      // notifications even when the PWA tab is closed.
+      ensurePushSubscription().catch((e) => log('warn', 'push subscribe failed: ' + (e?.message || e)));
+    }
   }
   function requestNotifyOnFirstSend() {
     if (!('Notification' in window) || Notification.permission !== 'default') return;
     Notification.requestPermission().then((p) => {
       notifyOnDone = (p === 'granted');
       log('info', 'notification permission: ' + p);
+      if (p === 'granted') {
+        ensurePushSubscription().catch((e) => log('warn', 'push subscribe failed: ' + (e?.message || e)));
+      }
     }).catch(() => {});
+  }
+
+  // ── Web Push subscription ────────────────────────────────────
+  // Idempotent: if already subscribed with the same VAPID key, just upserts
+  // the existing endpoint server-side. If the SW isn't registered yet, waits.
+  async function ensurePushSubscription() {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+      log('info', 'push: not supported by browser');
+      return;
+    }
+    // Need an active registration. The boot path registers SW so this should
+    // always exist when we get here.
+    const reg = await navigator.serviceWorker.ready;
+    if (!reg) { log('warn', 'push: no SW registration'); return; }
+
+    // Fetch VAPID public key once per session.
+    const r = await fetch(`/api/push/vapid?token=${encodeURIComponent(TOKEN)}`);
+    if (!r.ok) {
+      log('warn', `push: VAPID fetch failed HTTP ${r.status}`);
+      return;
+    }
+    const { publicKey } = await r.json();
+    if (!publicKey) { log('warn', 'push: VAPID public key empty'); return; }
+
+    // Check existing subscription. Browsers re-use if the applicationServerKey
+    // matches; if it doesn't (e.g. we rotated VAPID), unsubscribe + redo.
+    const applicationServerKey = urlBase64ToUint8Array(publicKey);
+    let sub = await reg.pushManager.getSubscription();
+    if (sub) {
+      // The key isn't directly exposed; we compare via toJSON's keys field
+      // implicitly by trying to re-subscribe with the same key — Push API
+      // dedupes if it matches.
+    }
+    if (!sub) {
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey,
+      });
+    }
+
+    const subJson = sub.toJSON();
+    const deviceLabel = navigator.userAgent.slice(0, 80);
+    const postRes = await fetch(`/api/push/subscribe?token=${encodeURIComponent(TOKEN)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ subscription: subJson, deviceLabel }),
+    });
+    if (!postRes.ok) {
+      log('warn', `push subscribe POST failed HTTP ${postRes.status}`);
+      return;
+    }
+    const j = await postRes.json();
+    log('ok', `push subscribed (total devices: ${j.total})`);
+  }
+
+  // VAPID server keys are URL-base64; the PushManager wants Uint8Array.
+  function urlBase64ToUint8Array(base64) {
+    const padding = '='.repeat((4 - base64.length % 4) % 4);
+    const b64 = (base64 + padding).replace(/-/g, '+').replace(/_/g, '/');
+    const raw = atob(b64);
+    const out = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+    return out;
   }
   function fireDoneNotification(payload) {
     if (!notifyOnDone || !document.hidden) return;
@@ -1987,6 +2058,18 @@
       connect();
     }
   });
+
+  // SW posts {kind:'push-click', sessionId} when user taps a turn-done
+  // notification. We pop into that session immediately.
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.addEventListener('message', (ev) => {
+      const m = ev.data || {};
+      if (m.kind === 'push-click' && m.sessionId && m.sessionId !== currentSessionId) {
+        log('info', 'push-click: switching to session ' + m.sessionId.slice(0, 8));
+        sendWS({ type: 'select_session', sessionId: m.sessionId });
+      }
+    });
+  }
 
   // ─── boot ─────────────────────────────────────────────────────
   if (!TOKEN) {

@@ -10,6 +10,8 @@ import { Hono } from 'hono';
 import { mountWebSocket } from './ws.ts';
 import { mountSessionApi } from './sessions.ts';
 import { externalSessions } from './harness/registry.ts';
+import { pushStore } from './store/push.ts';
+import { vapidPublicKey } from './push.ts';
 
 // Token resolution order:
 //   1. PHONE_AGENT_TOKEN env var (caller overrides everything)
@@ -204,6 +206,52 @@ app.post('/api/setup-https', async (c) => {
     url: `https://${dns}/launch`,
     serveMessage: (serveRes.stdout + '\n' + serveRes.stderr).trim().slice(0, 500),
   });
+});
+
+// ── Web Push subscription API ────────────────────────────────
+// Public-key fetch is token-gated like everything else. Subscribe persists
+// the browser's PushSubscription so the server can fire turn_done
+// notifications even when the PWA is closed.
+
+app.get('/api/push/vapid', (c) => {
+  if (c.req.query('token') !== TOKEN && c.req.header('x-token') !== TOKEN) {
+    return c.json({ error: 'unauthorized' }, 401);
+  }
+  const pub = vapidPublicKey();
+  if (!pub) return c.json({ error: 'VAPID keys not configured' }, 503);
+  return c.json({ publicKey: pub });
+});
+
+app.post('/api/push/subscribe', async (c) => {
+  if (c.req.query('token') !== TOKEN && c.req.header('x-token') !== TOKEN) {
+    return c.json({ error: 'unauthorized' }, 401);
+  }
+  let body: any;
+  try { body = await c.req.json(); } catch { return c.json({ error: 'bad json' }, 400); }
+  const sub = body?.subscription;
+  if (!sub || typeof sub.endpoint !== 'string' || !sub.keys?.p256dh || !sub.keys?.auth) {
+    return c.json({ error: 'malformed subscription' }, 400);
+  }
+  await pushStore.upsert({
+    endpoint: sub.endpoint,
+    keys: { p256dh: sub.keys.p256dh, auth: sub.keys.auth },
+    expirationTime: sub.expirationTime ?? null,
+    deviceLabel: typeof body.deviceLabel === 'string' ? body.deviceLabel.slice(0, 80) : undefined,
+    createdAt: Date.now(),
+  });
+  const total = await pushStore.count();
+  console.log(`[push] subscribed endpoint=${String(sub.endpoint).slice(0, 60)}... total=${total}`);
+  return c.json({ ok: true, total });
+});
+
+app.delete('/api/push/subscribe', async (c) => {
+  if (c.req.query('token') !== TOKEN && c.req.header('x-token') !== TOKEN) {
+    return c.json({ error: 'unauthorized' }, 401);
+  }
+  const endpoint = c.req.query('endpoint');
+  if (!endpoint) return c.json({ error: 'missing endpoint' }, 400);
+  await pushStore.delete(endpoint);
+  return c.json({ ok: true });
 });
 
 // Stable bookmark target — phone bookmarks this single URL forever,

@@ -22,6 +22,7 @@ import { defaultAgent, externalSessions, ownerOfSession } from './harness/regist
 import { watchJsonl, jsonlPathFor } from './harness/cmax-external/jsonl-watcher.ts';
 import { appendInjectUserMessage, appendMirrorEntry } from './harness/cmax-external/jsonl-writer.ts';
 import { linkStore } from './store/links.ts';
+import { sendToAll as sendPushToAll } from './push.ts';
 
 function externalStatusFor(sessionId: string | null): ExternalSessionStatus | null {
   if (!sessionId) return null;
@@ -211,15 +212,36 @@ function createHandler(c: any, cfg: Cfg) {
           send({ type: 'agent_event', turnId: tid, seq: emit.seq, event: emit.event });
           return;
         }
-        case 'turn_done':
+        case 'turn_done': {
           maybeWriteMirror().catch((e) => {
             console.error('[ws] mirror write failed:', e instanceof Error ? e.message : String(e));
           });
           send({ type: 'turn_done' });
+          // Push notification to all registered devices. Body uses up to the
+          // last 100 chars of the assistant reply so the lock-screen preview
+          // is meaningful. The SW handler navigates to /launch on click and
+          // the client auto-selects the session via ?session= query.
+          const sidForPush = myCurrentSessionId ?? 'new';
+          const assistantSummary = myCurrentTurnAssistantText
+            .trim()
+            .slice(-180)
+            .replace(/\s+/g, ' ');
+          sendPushToAll({
+            title: '✅ Claude 回完了',
+            body: assistantSummary || '（无文本回复，可能只用了 tool）',
+            tag: `turn-${sidForPush}`,
+            url: `/launch`,
+            sessionId: myCurrentSessionId ?? undefined,
+          }).then((r) => {
+            if (r.delivered + r.pruned > 0) {
+              console.log(`[push] turn_done sent: delivered=${r.delivered} pruned=${r.pruned}`);
+            }
+          }).catch((e) => console.warn('[push] turn_done fan-out failed:', e?.message));
           // Reset capture buffers for the next turn on this session.
           myCurrentTurnPrompt = '';
           myCurrentTurnAssistantText = '';
           return;
+        }
         case 'error':
           // On error, drop the capture — we don't want a half-mirror.
           myCurrentTurnPrompt = '';
