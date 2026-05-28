@@ -27,6 +27,7 @@ function externalStatusFor(sessionId: string | null): ExternalSessionStatus | nu
   return e ? { pid: e.pid, account: e.account, kind: e.kind, status: e.status } : null;
 }
 
+
 // Module-level settings shared across WS connections. Phone toggles update
 // this; new prompts use the latest values.
 let agentSettings: AgentSettings = {
@@ -327,16 +328,23 @@ function createHandler(c: any, cfg: Cfg) {
           send({ type: 'error', message: '这个 session 已经有一个回合在进行了，切换或等待' });
           return;
         }
-        // Block prompts only when the external driver is currently THINKING
-        // (busy). When it's idle, the CLI isn't racing for the next turn so
-        // we let the phone send freely. The user already saw the dot in the
-        // drawer so they know another end exists.
+        // Ownership rule: any session with a live external claude.exe
+        // (CLI / bg job) attached is OFF-LIMITS for agentphone to drive.
+        // Two SDK processes resuming the same jsonl race for assistant
+        // writes — the loser exits with [ede_diagnostic] (we saw this hit
+        // 99% of the time during testing). The user must create a fresh
+        // session for phone-side chatting.
+        //
+        // Takeover used to bypass this for "idle" externals, but idle ≠
+        // safe: cmax keeps a process alive watching the jsonl and will
+        // pounce on any new user entry. There's no race-free way to share
+        // a session between two claude.exe instances, so we just don't.
         const ext = externalStatusFor(myCurrentSessionId);
-        if (ext && ext.status === 'busy' && myTakeoverSid !== myCurrentSessionId) {
-          console.log(`[ws] prompt rejected: follow-mode busy (external pid=${ext.pid} account=${ext.account})`);
+        if (ext) {
+          console.log(`[ws] prompt rejected: session owned by ${ext.account} (pid=${ext.pid} status=${ext.status})`);
           send({
             type: 'error',
-            message: `${ext.account} 的 CLI 正在思考，等它结束或点"接管"`,
+            message: `这个 session 由 ${ext.account} 的 CLI 拥有（pid ${ext.pid}）。两个 claude.exe 同时写一份 jsonl 会冲突，所以手机端只能 follow，不能发送。点"+ 新建"开一个手机端独占的 session。`,
           });
           return;
         }

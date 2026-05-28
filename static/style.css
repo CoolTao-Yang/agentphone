@@ -1090,7 +1090,8 @@ footer {
   color: var(--user);
   border-bottom-color: rgba(125, 211, 252, 0.30);
 }
-.banner.follow-mode .follow-takeover {
+.banner.follow-mode .follow-takeover,
+.banner.follow-mode .follow-newsession {
   background: var(--accent);
   color: #1a0f00;
   border: none;
@@ -1101,4 +1102,5 @@ footer {
   cursor: pointer;
   margin-left: 4px;
 }
-.banner.follow-mode .follow-takeover:active { transform: scale(0.96); }
+.banner.follow-mode .follow-takeover:active,
+.banner.follow-mode .follow-newsession:active { transform: scale(0.96); }

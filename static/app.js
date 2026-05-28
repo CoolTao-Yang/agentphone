@@ -226,12 +226,13 @@
     }
   }
 
-  // True when the current session is being driven by another claude.exe AND
-  // that driver is currently BUSY AND the user hasn't pressed 接管 yet.
-  // When the driver is idle we let the user send freely — the CLI isn't
-  // about to race us for the next turn.
+  // True whenever an external claude.exe (CLI / bg) owns the current
+  // session. We always block — two SDK processes resuming the same jsonl
+  // race for assistant writes and the loser exits with [ede_diagnostic].
+  // No "takeover" any more — the only safe escape is to create a new
+  // session that agentphone owns end-to-end.
   function isFollowBlocked() {
-    return !!currentExternal && currentExternal.status === 'busy' && !followModeTakenOver;
+    return !!currentExternal;
   }
 
   function startFollowRefresh() {
@@ -259,36 +260,24 @@
     }
     if (!currentExternal) {
       $input.placeholder = '问 claude…';
-      followModeTakenOver = false;  // belt + suspenders
+      followModeTakenOver = false;  // dead state, but keep flag in sync
       stopFollowRefresh();
       setBusy(busy);                // recompute send-button enablement
       return;
     }
     const ext = currentExternal;
-    // The history poll runs whenever any external driver is attached, but
-    // only does network when the driver is BUSY — when idle the jsonl
-    // isn't changing and re-polling is just waste.
+    // Poll history only while the owner is actively writing; idle owners
+    // aren't appending anything so the poll would just burn cycles.
     if (ext.status === 'busy') startFollowRefresh();
     else stopFollowRefresh();
 
-    if (ext.status === 'busy' && !followModeTakenOver) {
-      $input.placeholder = `🔒 ${ext.account} CLI 正在思考，点接管才能发送`;
-      const html = `👀 <b>follow mode</b> — <code>${ext.account}</code> 的 ${ext.kind} CLI (<code>pid ${ext.pid}</code>) 正在思考此 session。 ` +
-                   `你能看实时更新，但发送已禁用。` +
-                   ` <button type="button" class="follow-takeover" data-sid="${currentSessionId || ''}">接管</button>`;
-      addFollowBanner(html);
-    } else if (ext.status === 'busy' && followModeTakenOver) {
-      $input.placeholder = `⚠ 已接管 — 双方驱动可能冲突`;
-      const html = `⚠ <b>已接管</b> — 注意 <code>${ext.account}</code> CLI 也在用此 session，双方写同一份 jsonl 可能冲突。`;
-      addFollowBanner(html);
-    } else {
-      // ext.status === 'idle' — driver attached but not racing right now.
-      // Quiet UI: no banner, normal placeholder. Subtle "● live" in the
-      // drawer + the status pill remain so the user knows there's another
-      // owner of this session.
-      $input.placeholder = '问 claude… (CLI 端 idle · 共享 session)';
-      followModeTakenOver = false;  // takeover expires on idle
-    }
+    $input.placeholder = `🔒 ${ext.account} CLI 拥有此 session · 不能发送`;
+    const verb = ext.status === 'busy' ? '正在思考' : 'idle';
+    const html = `👀 <b>follow mode</b> — <code>${ext.account}</code> 的 ${ext.kind} CLI ` +
+                 `(<code>pid ${ext.pid}</code>) 拥有此 session · ${verb}。` +
+                 ` 两个 claude.exe 同时写同一份 jsonl 会冲突，所以手机端只读。` +
+                 ` 要在手机聊 → <button type="button" class="follow-newsession">+ 新建 session</button>`;
+    addFollowBanner(html);
     setBusy(busy);
   }
 
@@ -298,15 +287,11 @@
     b.className = 'banner warn follow-mode';
     b.innerHTML = html + ' <button class="x" type="button" aria-label="dismiss">✕</button>';
     b.querySelector('.x').addEventListener('click', () => b.remove());
-    const takeoverBtn = b.querySelector('.follow-takeover');
-    if (takeoverBtn) {
-      takeoverBtn.addEventListener('click', () => {
-        const sid = takeoverBtn.dataset.sid;
-        if (!sid) return;
-        followModeTakenOver = true;
-        sendWS({ type: 'takeover', sessionId: sid });
-        showToast('已接管 · 可发送，但注意冲突', 'warn', 2500);
-        applyFollowMode();
+    const newBtn = b.querySelector('.follow-newsession');
+    if (newBtn) {
+      newBtn.addEventListener('click', () => {
+        if (typeof openNewSessionModal === 'function') openNewSessionModal();
+        else $newSessionBtn?.click();
       });
     }
     $bannerRow.appendChild(b);
@@ -982,7 +967,7 @@
         case 'error':
           setBusy(false);
           log('error', m.message);
-          if (/context\s*limit|too\s*long|maximum.*context|compact.*continue/i.test(m.message || '')) {
+          if (/context\s*limit|too\s*long|maximum.*context|compact.*continue|ede_diagnostic|result_type=user|stop_reason=null/i.test(m.message || '')) {
             appendContextFullCard(m.message);
           } else {
             appendError(m.message);
