@@ -19,6 +19,7 @@ import type { Hono } from 'hono';
 import type { AgentSettings, ClientMessage, ExternalSessionStatus, ServerMessage } from '../shared/types.ts';
 import { TurnRunner } from './runner.ts';
 import { defaultAgent, externalSessions, ownerOfSession } from './harness/registry.ts';
+import { watchJsonl, jsonlPathFor } from './harness/cmax-external/jsonl-watcher.ts';
 
 function externalStatusFor(sessionId: string | null): ExternalSessionStatus | null {
   if (!sessionId) return null;
@@ -117,6 +118,12 @@ function createHandler(c: any, cfg: Cfg) {
   // the session changes.
   let myTakeoverSid: string | null = null;
   let myExternalUnsubscribe: (() => void) | null = null;
+  // Stop function for the per-connection jsonl-watcher. Only set when the
+  // current session is externally-owned — owned sessions get their stream
+  // through the TurnRunner subscribe path. Per-connection seq counter for
+  // these external events; assigned a synthetic turnId tied to the session.
+  let myExternalWatcherStop: (() => void) | null = null;
+  let myExtSeq = 0;
 
   const send = (msg: ServerMessage) => { if (ws) ws.send(JSON.stringify(msg)); };
 
@@ -137,6 +144,28 @@ function createHandler(c: any, cfg: Cfg) {
   }
   function stopHeartbeat() {
     if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+  }
+
+  /**
+   * Start (or restart) a jsonl-watcher for the current session if it's owned
+   * by an external claude.exe. The watcher pushes appended user/assistant/
+   * tool events to this WS as `agent_event` messages, giving follow-mode
+   * live updates without polling. For owned sessions this is a no-op —
+   * those stream through the TurnRunner subscribe path.
+   */
+  function refreshExternalWatcher(sessionId: string | null): void {
+    if (myExternalWatcherStop) { myExternalWatcherStop(); myExternalWatcherStop = null; }
+    if (!sessionId) return;
+    const ext = externalSessions.get(sessionId);
+    if (!ext) return;
+    const path = jsonlPathFor(ext.account, ext.cwd, sessionId);
+    const turnId = `ext-${sessionId}`;
+    myExternalWatcherStop = watchJsonl(path, {
+      onEvent: (event) => {
+        send({ type: 'agent_event', turnId, seq: myExtSeq++, event });
+      },
+    });
+    console.log(`[ws] external watcher armed sessionId=${sessionId.slice(0, 8)} path=${path}`);
   }
 
   function subscribeToRunner(r: TurnRunner) {
@@ -183,6 +212,9 @@ function createHandler(c: any, cfg: Cfg) {
 
       const r = getRunnerForSession(myCurrentSessionId);
       subscribeToRunner(r);
+      // If the resume-target session is externally-owned, arm the jsonl
+      // watcher so follow-mode gets live events without polling.
+      refreshExternalWatcher(myCurrentSessionId);
 
       // Watch external-session status so we can push live changes.
       if (myExternalUnsubscribe) myExternalUnsubscribe();
@@ -234,6 +266,9 @@ function createHandler(c: any, cfg: Cfg) {
           if (owner) newRunner.setAgent(owner);
         }
         subscribeToRunner(newRunner);
+        // Switch the external watcher to the new session (or off if not external).
+        myExtSeq = 0;
+        refreshExternalWatcher(myCurrentSessionId);
 
         send({
           type: 'session_set',
@@ -378,6 +413,7 @@ function createHandler(c: any, cfg: Cfg) {
       // next reconnect can replay.
       if (myUnsubscribe) { myUnsubscribe(); myUnsubscribe = null; }
       if (myExternalUnsubscribe) { myExternalUnsubscribe(); myExternalUnsubscribe = null; }
+      if (myExternalWatcherStop) { myExternalWatcherStop(); myExternalWatcherStop = null; }
       stopHeartbeat();
       ws = null;
     },

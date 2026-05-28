@@ -82,7 +82,12 @@ export type AgentEvent =
   | { kind: 'tool_request'; toolUseId: string; toolName: string; input: unknown; autoApproved: boolean }
   | { kind: 'tool_decision'; toolUseId: string; allowed: boolean }
   | { kind: 'tool_result'; toolUseId: string; content: string; isError: boolean }
-  | { kind: 'result'; success: boolean; durationMs: number; turns: number; costUsd: number; isError: boolean };
+  | { kind: 'result'; success: boolean; durationMs: number; turns: number; costUsd: number; isError: boolean }
+  // Emitted by the cmax-external jsonl-watcher when a NEW user message lands
+  // in a session driven by another claude.exe (e.g. user typed in the CLI).
+  // Follow-mode UI renders this as a regular user prompt so the phone sees
+  // CLI input live without polling.
+  | { kind: 'external_user_prompt'; text: string; images?: ImageAttachment[] };
 
 // ────────────────────────────────────────────────────────────────
 // REST

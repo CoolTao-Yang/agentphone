@@ -82,10 +82,9 @@
   /** @type {{pid:number,account:string,kind:string,status:'idle'|'busy'} | null} */
   let currentExternal = null;  // external (CLI/bg) status of currentSessionId
   let followModeTakenOver = false; // user clicked 接管 — temporarily allow send
-  // Follow-mode live tail: while the external CLI is busy on the current
-  // session, poll history every 4s. Re-render only when the API's `total`
-  // grows, so we don't flicker when nothing has changed.
-  let followRefreshTimer = null;
+  // v19: follow-mode is now event-pushed by the server jsonl-watcher.
+  // lastHistoryTotal is kept for fetchAndRenderHistory's no-op skip path
+  // (called once on first load).
   let lastHistoryTotal = -1;
   /** @type {Array<{ data: string, mediaType: string, name?: string }>} */
   let pendingImages = [];
@@ -235,21 +234,14 @@
     return !!currentExternal;
   }
 
-  function startFollowRefresh() {
-    stopFollowRefresh();
-    if (!currentSessionId) return;
-    // Cheap probe every 4s — only re-renders when API's total grew. Skipped
-    // when tab is hidden (browser throttles anyway and we'd waste cycles).
-    followRefreshTimer = setInterval(() => {
-      if (!currentSessionId || !currentExternal) { stopFollowRefresh(); return; }
-      if (document.hidden) return;
-      fetchAndRenderHistory(currentSessionId, { silent: true, skipIfUnchanged: true })
-        .catch(() => {});
-    }, 4000);
-  }
-  function stopFollowRefresh() {
-    if (followRefreshTimer) { clearInterval(followRefreshTimer); followRefreshTimer = null; }
-  }
+  // Follow-mode used to poll /api/sessions/:id/messages every 4s while the
+  // external driver was busy. Since v19 the server pushes live events from
+  // a jsonl-tail watcher (server/harness/cmax-external/jsonl-watcher.ts) as
+  // regular agent_event messages, so no client poll is needed — these
+  // helpers became no-ops and stay only so callers can keep their existing
+  // start/stop sequencing without conditionals.
+  function startFollowRefresh() { /* server pushes via watcher */ }
+  function stopFollowRefresh()  { /* nothing to stop */ }
 
   /** Reflect currentExternal into UI: banner + send-button gate + input hint. */
   function applyFollowMode() {
@@ -778,6 +770,12 @@
       case 'result':
         fireDoneNotification(evt);
         return appendResult(evt);
+      case 'external_user_prompt':
+        // Emitted by the cmax-external jsonl-watcher when a new user
+        // message lands in a session driven by another claude.exe.
+        // Render as a regular user message so follow-mode shows CLI
+        // input the moment it's written.
+        return appendUser(evt.text, evt.images);
     }
   }
 
