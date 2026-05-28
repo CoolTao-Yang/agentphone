@@ -82,6 +82,11 @@
   /** @type {{pid:number,account:string,kind:string,status:'idle'|'busy'} | null} */
   let currentExternal = null;  // external (CLI/bg) status of currentSessionId
   let followModeTakenOver = false; // user clicked 接管 — temporarily allow send
+  // Follow-mode live tail: while the external CLI is busy on the current
+  // session, poll history every 4s. Re-render only when the API's `total`
+  // grows, so we don't flicker when nothing has changed.
+  let followRefreshTimer = null;
+  let lastHistoryTotal = -1;
   /** @type {Array<{ data: string, mediaType: string, name?: string }>} */
   let pendingImages = [];
   /** @type {{ autoApproveTools: boolean, effort: string }} */
@@ -228,6 +233,22 @@
     return !!currentExternal && !followModeTakenOver;
   }
 
+  function startFollowRefresh() {
+    stopFollowRefresh();
+    if (!currentSessionId) return;
+    // Cheap probe every 4s — only re-renders when API's total grew. Skipped
+    // when tab is hidden (browser throttles anyway and we'd waste cycles).
+    followRefreshTimer = setInterval(() => {
+      if (!currentSessionId || !currentExternal) { stopFollowRefresh(); return; }
+      if (document.hidden) return;
+      fetchAndRenderHistory(currentSessionId, { silent: true, skipIfUnchanged: true })
+        .catch(() => {});
+    }, 4000);
+  }
+  function stopFollowRefresh() {
+    if (followRefreshTimer) { clearInterval(followRefreshTimer); followRefreshTimer = null; }
+  }
+
   /** Reflect currentExternal into UI: banner + send-button gate + input hint. */
   function applyFollowMode() {
     // Remove previous follow-mode banner (we always re-render — easier than diffing).
@@ -238,9 +259,12 @@
     if (!currentExternal) {
       $input.placeholder = '问 claude…';
       followModeTakenOver = false;  // belt + suspenders
+      stopFollowRefresh();
       setBusy(busy);                // recompute send-button enablement
       return;
     }
+    // External driver present → start (or keep) live history polling.
+    startFollowRefresh();
     const ext = currentExternal;
     const verb = ext.status === 'busy' ? '正在思考' : '正在连接';
     if (!followModeTakenOver) {
@@ -786,7 +810,12 @@
   }
   armServerWatchdog();
 
+  let reconnectTimer = null;
+
   function connect(reason) {
+    // Cancel any pending backoff timer — otherwise foreground-resume +
+    // pending onclose-backoff both fire connect() and we leak sockets.
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
     // Forcibly close any previous socket BEFORE creating a new one. Without
     // this the previous WS' onmessage handler stays alive and processes
     // events in parallel with the new connection — each event ends up
@@ -969,7 +998,8 @@
       setBusy(false);
       log('warn', `ws closed code=${ev.code} reason=${ev.reason || '-'} wasClean=${ev.wasClean}`);
       const wait = Math.min(8000, 500 * (1 + reconnectAttempts++));
-      setTimeout(connect, wait);
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      reconnectTimer = setTimeout(() => { reconnectTimer = null; connect('backoff'); }, wait);
     };
     myWs.onerror = () => {
       if (stale()) return;
@@ -1129,12 +1159,17 @@
     fetchAndRenderHistory(sessionId);
   }
 
-  async function fetchAndRenderHistory(sessionId) {
-    const placeholder = document.createElement('div');
-    placeholder.className = 'history-sep loading';
-    placeholder.textContent = '── 加载历史… ──';
-    $messages.appendChild(placeholder);
-    autoScroll();
+  async function fetchAndRenderHistory(sessionId, opts) {
+    const silent = !!(opts && opts.silent);
+    const skipIfUnchanged = !!(opts && opts.skipIfUnchanged);
+    let placeholder = null;
+    if (!silent) {
+      placeholder = document.createElement('div');
+      placeholder.className = 'history-sep loading';
+      placeholder.textContent = '── 加载历史… ──';
+      $messages.appendChild(placeholder);
+      autoScroll();
+    }
 
     try {
       const r = await fetch(
@@ -1142,13 +1177,27 @@
         `?token=${encodeURIComponent(TOKEN)}&limit=30`
       );
       if (!r.ok) {
-        placeholder.textContent = `── 加载历史失败 (HTTP ${r.status}) ──`;
-        placeholder.classList.add('err');
+        if (placeholder) {
+          placeholder.textContent = `── 加载历史失败 (HTTP ${r.status}) ──`;
+          placeholder.classList.add('err');
+        }
         return;
       }
       const data = await r.json();
       const msgs = data.messages || [];
-      placeholder.remove();
+      // Silent-poll bail-out: if the API's total event count hasn't grown
+      // since our last fetch for this session, the jsonl hasn't changed —
+      // skip re-rendering to avoid flicker.
+      if (skipIfUnchanged && typeof data.total === 'number' && data.total === lastHistoryTotal) {
+        if (placeholder) placeholder.remove();
+        return;
+      }
+      if (typeof data.total === 'number') lastHistoryTotal = data.total;
+      // For silent re-renders we replace the existing content so the user
+      // sees fresh history; otherwise the original behaviour (append only)
+      // stays for first-load.
+      if (silent) clearMessages();
+      if (placeholder) placeholder.remove();
 
       if (!msgs.length) {
         const sep = document.createElement('div');
@@ -1214,6 +1263,7 @@
     $messages.innerHTML = '';
     lastTurnId = null;
     lastRenderedSeq = -1;
+    lastHistoryTotal = -1;  // a new session never matches the previous total
     const e = document.createElement('div');
     e.className = 'empty'; e.id = 'empty';
     e.textContent = '新对话';
@@ -1724,9 +1774,15 @@
 
 
   // On Android Chrome backgrounded PWAs the JS context is frequently frozen
-  // and the WebSocket dies — but onclose may not fire (or its reconnect
-  // setTimeout doesn't run) until the page becomes visible again. So on
-  // visibility-resume we ALWAYS check ws health and force a reconnect.
+  // and the WebSocket dies. Two failure modes to defend against:
+  //   1. onclose fires while hidden but its setTimeout doesn't run until
+  //      visible again — handled by reconnectTimer being cancelled on
+  //      explicit connect() below.
+  //   2. The WS LOOKS alive (readyState===1) but the underlying TCP was
+  //      killed by mobile NAT/CGNAT silently. So after ≥10s away we don't
+  //      trust readyState and force a reconnect regardless. The watchdog
+  //      timestamp is also nuked so the server-silence check has a fresh
+  //      baseline.
   let lastHiddenAt = 0;
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
@@ -1735,13 +1791,19 @@
       log('info', 'page hidden');
     } else {
       const awaySec = Math.round((Date.now() - lastHiddenAt) / 1000);
-      log('info', `page visible (away ${awaySec}s, ws.readyState=${ws ? ws.readyState : 'null'})`);
-      if (!ws || ws.readyState !== 1 /* OPEN */) {
-        log('warn', 'ws not open on resume — force reconnect');
+      const rs = ws ? ws.readyState : 'null';
+      log('info', `page visible (away ${awaySec}s, ws.readyState=${rs})`);
+      // Reset watchdog baseline — a stale lastServerActivityAt from before
+      // background would otherwise trigger an immediate force-reconnect.
+      lastServerActivityAt = Date.now();
+      const looksDead = !ws || ws.readyState !== 1;
+      const possiblyZombie = awaySec >= 10;  // mobile NAT eats idle TCP fast
+      if (looksDead || possiblyZombie) {
+        log('warn', `ws ${looksDead ? 'not open' : 'possibly zombie'} on resume — force reconnect`);
         try { ws && ws.close(); } catch {}
         ws = null;
         reconnectAttempts = 0;
-        connect();
+        connect(possiblyZombie ? 'visibility-zombie' : 'visibility-dead');
       }
     }
   });
