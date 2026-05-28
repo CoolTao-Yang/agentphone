@@ -1,8 +1,11 @@
-/* claude4phone — browser client.
+/* agentphone — browser client.
  * - WebSocket to /ws (token in URL ?token=...).
  * - Token-level streaming of assistant text (re-parsed every 100ms).
  * - Tool calls render as inline cards with approve / deny / "本轮全 approve".
  * - Sessions drawer fetched via /api/sessions; pick / rename / delete.
+ * - When a session is picked, last N history messages are fetched from
+ *   /api/sessions/:id/messages and rendered so the phone has the same
+ *   working context as the desktop.
  * - Voice: SpeechRecognition (STT) + speechSynthesis (TTS) with diagnostic
  *   surface so failures aren't silent.
  */
@@ -614,12 +617,86 @@
       return;
     }
     sendWS({ type: 'select_session', sessionId, cwd });
-    // optimistic: clear messages, set state
     clearMessages();
     currentSessionId = sessionId;
     setCwdDisplay(cwd);
     closeDrawer();
     showToast(`已切换到 session ${sessionId.slice(0,8)}`, 'info');
+    // Materialize last ~30 history messages so the phone shows the same
+    // ongoing context as the desktop.
+    fetchAndRenderHistory(sessionId);
+  }
+
+  async function fetchAndRenderHistory(sessionId) {
+    const placeholder = document.createElement('div');
+    placeholder.className = 'history-sep loading';
+    placeholder.textContent = '── 加载历史… ──';
+    $messages.appendChild(placeholder);
+    autoScroll();
+
+    try {
+      const r = await fetch(
+        `/api/sessions/${encodeURIComponent(sessionId)}/messages` +
+        `?token=${encodeURIComponent(TOKEN)}&limit=30`
+      );
+      if (!r.ok) {
+        placeholder.textContent = `── 加载历史失败 (HTTP ${r.status}) ──`;
+        placeholder.classList.add('err');
+        return;
+      }
+      const data = await r.json();
+      const msgs = data.messages || [];
+      placeholder.remove();
+
+      if (!msgs.length) {
+        const sep = document.createElement('div');
+        sep.className = 'history-sep';
+        sep.textContent = '── 这是一个空 session ──';
+        $messages.appendChild(sep);
+        return;
+      }
+
+      for (const m of msgs) {
+        if (m.role === 'user') {
+          appendUser(m.text);
+        } else if (m.role === 'assistant') {
+          renderHistoricalAssistant(m.text);
+        } else if (m.role === 'tool_use') {
+          appendToolRequest(m.toolUseId, m.name, m.input, true);
+        } else if (m.role === 'tool_result') {
+          onToolResult(m.toolUseId, m.content, m.isError);
+        }
+      }
+
+      const sep = document.createElement('div');
+      sep.className = 'history-sep';
+      const moreNote = data.total > msgs.length
+        ? `（共 ${data.total} 条，已加载最近 ${msgs.length}）`
+        : '';
+      sep.textContent = `── 历史 ${msgs.length} 条${moreNote} · 新消息从下面开始 ──`;
+      $messages.appendChild(sep);
+      autoScroll();
+    } catch (e) {
+      placeholder.textContent = '── 加载历史出错: ' + (e.message || e) + ' ──';
+      placeholder.classList.add('err');
+      log('error', 'history fetch: ' + (e.message || e));
+    }
+  }
+
+  function renderHistoricalAssistant(text) {
+    clearEmpty();
+    const msg = document.createElement('div');
+    msg.className = 'msg assistant';
+    const who = document.createElement('div');
+    who.className = 'who';
+    who.textContent = 'claude';
+    const body = document.createElement('div');
+    body.className = 'body';
+    body.innerHTML = renderMarkdown(text);
+    highlightInside(body);
+    msg.appendChild(who);
+    msg.appendChild(body);
+    $messages.appendChild(msg);
   }
 
   function startNewSession(cwd) {

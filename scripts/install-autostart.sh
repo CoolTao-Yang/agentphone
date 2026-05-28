@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Installs claude4phone as a systemd --user service.
+# Installs agentphone as a systemd --user service.
 # After this, `npm start` runs at WSL/Linux boot and restarts on crash.
 # Idempotent: safe to re-run.
 
@@ -8,8 +8,8 @@ set -euo pipefail
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
 USER_NAME="$(id -un)"
 SYSTEMD_DIR="$HOME/.config/systemd/user"
-CONFIG_DIR="$HOME/.config/claude4phone"
-TEMPLATE="$DIR/scripts/claude4phone.service.template"
+CONFIG_DIR="$HOME/.config/agentphone"
+TEMPLATE="$DIR/scripts/agentphone.service.template"
 
 if [[ ! -f "$TEMPLATE" ]]; then
   echo "ERROR: template not found at $TEMPLATE" >&2
@@ -44,12 +44,12 @@ fi
 
 # Render and install unit
 sed "s|__INSTALL_DIR__|$DIR|g; s|__HOME__|$HOME|g" \
-    "$TEMPLATE" > "$SYSTEMD_DIR/claude4phone.service"
-echo "✓ wrote $SYSTEMD_DIR/claude4phone.service"
+    "$TEMPLATE" > "$SYSTEMD_DIR/agentphone.service"
+echo "✓ wrote $SYSTEMD_DIR/agentphone.service"
 
 systemctl --user daemon-reload
-systemctl --user enable --now claude4phone.service
-echo "✓ enabled + started claude4phone.service"
+systemctl --user enable --now agentphone.service
+echo "✓ enabled + started agentphone.service"
 
 # Enable linger so the service keeps running when no shell is open (WSL needs this).
 if command -v loginctl >/dev/null 2>&1; then
@@ -65,7 +65,7 @@ fi
 
 echo ""
 echo "─── status ───"
-systemctl --user status claude4phone --no-pager 2>&1 | head -8 || true
+systemctl --user status agentphone --no-pager 2>&1 | head -8 || true
 echo ""
 
 # Print the URL the user should bookmark on their phone
@@ -78,6 +78,6 @@ TS_IP="${TS_IP:-<your-tailscale-ip>}"
 echo "Bookmark this on your phone (Chrome → Add to Home Screen):"
 echo "   http://$TS_IP:$PORT_VAL/?token=$TOKEN_VAL"
 echo ""
-echo "stop:    systemctl --user stop claude4phone"
-echo "logs:    journalctl --user -u claude4phone -f"
-echo "remove:  systemctl --user disable --now claude4phone && rm $SYSTEMD_DIR/claude4phone.service"
+echo "stop:    systemctl --user stop agentphone"
+echo "logs:    journalctl --user -u agentphone -f"
+echo "remove:  systemctl --user disable --now agentphone && rm $SYSTEMD_DIR/agentphone.service"

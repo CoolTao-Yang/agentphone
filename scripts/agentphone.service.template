@@ -1,12 +1,12 @@
 [Unit]
-Description=claude4phone server
+Description=agentphone server
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
 WorkingDirectory=__INSTALL_DIR__
-EnvironmentFile=-__HOME__/.config/claude4phone/env
+EnvironmentFile=-__HOME__/.config/agentphone/env
 ExecStart=/usr/bin/env npm start
 Restart=on-failure
 RestartSec=5s

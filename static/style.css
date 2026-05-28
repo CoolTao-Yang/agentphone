@@ -1,5 +1,5 @@
 /* ─────────────────────────────────────────────────────────────────
- * claude4phone — warm dark workshop aesthetic.
+ * agentphone — warm dark workshop aesthetic.
  * Single-color accent (amber). No bubbles — terminal-style prefixes.
  * Mobile first; max-width caps on desktop to keep line length sane.
  * ──────────────────────────────────────────────────────────────── */
@@ -625,6 +625,23 @@ footer {
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 .toast.error { color: var(--error); border-color: var(--error); }
 .toast.ok    { color: var(--ok); border-color: var(--ok); }
+
+/* ───── History separator ───── */
+.history-sep {
+  text-align: center;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  padding: 14px 12px;
+  margin: 6px -4px;
+  letter-spacing: 0.04em;
+  border-top: 1px dashed var(--border);
+  border-bottom: 1px dashed var(--border);
+  background: rgba(0, 0, 0, 0.18);
+  user-select: none;
+}
+.history-sep.loading { color: var(--muted-2); font-style: italic; }
+.history-sep.err { color: var(--error); border-color: var(--error); }
 
 /* ───── Debug overlay ───── */
 .debug {

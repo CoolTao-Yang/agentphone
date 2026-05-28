@@ -1,4 +1,4 @@
-# claude4phone
+# agentphone
 
 Drive [Claude Code](https://claude.com/claude-code) from your phone over Tailscale.
 
@@ -39,8 +39,8 @@ access — see below).
 ## Install + run
 
 ```bash
-git clone https://github.com/<you>/claude4phone.git
-cd claude4phone
+git clone https://github.com/<you>/agentphone.git
+cd agentphone
 npm install
 npm start
 ```
@@ -49,8 +49,8 @@ The server prints something like:
 
 ```
 ═══════════════════════════════════════════════════
-📱  claude4phone server on :8765
-📂  default cwd: /home/yzt/test/claude4phone
+📱  agentphone server on :8765
+📂  default cwd: /home/yzt/test/agentphone
 🔑  token:       a8c4f97d92e0b1c4
 
 Open on phone (Chrome → Add to Home Screen):
@@ -107,16 +107,16 @@ console → DNS → enable HTTPS.
 Installs a systemd **user** unit that:
 
 - starts at boot via `loginctl enable-linger`
-- reads `~/.config/claude4phone/env` for `PHONE_AGENT_TOKEN` + `PORT`
+- reads `~/.config/agentphone/env` for `PHONE_AGENT_TOKEN` + `PORT`
 - restarts on crash
 
 Manage with:
 
 ```bash
-systemctl --user status   claude4phone
-systemctl --user stop     claude4phone
-systemctl --user disable  claude4phone
-journalctl --user -u claude4phone -f
+systemctl --user status   agentphone
+systemctl --user stop     agentphone
+systemctl --user disable  agentphone
+journalctl --user -u agentphone -f
 ```
 
 > WSL note: the unit needs systemd enabled in WSL (`[boot] systemd=true` in
@@ -125,8 +125,8 @@ journalctl --user -u claude4phone -f
 ## Sessions
 
 Sessions are persisted by Claude itself at
-`~/.claude/projects/<encoded-cwd>/<uuid>.jsonl`. claude4phone only adds a
-sidecar of user‑provided **labels** at `~/.config/claude4phone/labels.json`:
+`~/.claude/projects/<encoded-cwd>/<uuid>.jsonl`. agentphone only adds a
+sidecar of user‑provided **labels** at `~/.config/agentphone/labels.json`:
 
 ```json
 {
@@ -173,7 +173,7 @@ turn count, and a one‑line preview lifted from the first user message.
 │   ├── sw.js                     service worker (caches shell)
 │   └── icon.svg
 └── scripts/
-    ├── claude4phone.service.template
+    ├── agentphone.service.template
     └── install-autostart.sh
 ```
 

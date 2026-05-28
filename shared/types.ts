@@ -46,3 +46,19 @@ export type SessionSummary = {
 
 export type RecentCwdsResponse = { cwds: string[] };
 export type UpdateSessionRequest = { name?: string | null };
+
+// History messages returned from GET /api/sessions/:id/messages — already
+// stripped of system-only wrappers (<local-command-caveat>, <command-name> …)
+// and de-noised for direct rendering.
+export type HistoryMessage =
+  | { role: 'user'; text: string }
+  | { role: 'assistant'; text: string }
+  | { role: 'tool_use'; toolUseId: string; name: string; input: unknown }
+  | { role: 'tool_result'; toolUseId: string; content: string; isError: boolean };
+
+export type SessionMessagesResponse = {
+  sessionId: string;
+  cwd: string;
+  messages: HistoryMessage[];
+  total: number;       // total events in the jsonl (so client knows there's more)
+};

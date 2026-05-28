@@ -1,7 +1,7 @@
 {
-  "name": "claude4phone",
-  "short_name": "c4p",
-  "description": "Drive Claude Code from your phone over Tailscale.",
+  "name": "agentphone",
+  "short_name": "agentphone",
+  "description": "Drive your local coding agent from your phone over Tailscale.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

@@ -28,7 +28,7 @@ const server = serve({ fetch: app.fetch, port: PORT, hostname: HOST }, (info) =>
     }
   }
   console.log('═══════════════════════════════════════════════════');
-  console.log(`📱  claude4phone server on :${info.port}`);
+  console.log(`📱  agentphone server on :${info.port}`);
   console.log(`📂  default cwd: ${DEFAULT_CWD}`);
   console.log(`🔑  token:       ${TOKEN}`);
   console.log('');
