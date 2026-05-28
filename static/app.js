@@ -92,11 +92,14 @@
   function renderMarkdown(text) {
     if (!window.marked) return `<pre>${escapeHtml(text)}</pre>`;
     try {
-      // Standard markdown rendering: a single \n is whitespace, not a <br>.
-      // (We used to have breaks:true which forced every single newline into
-      // a line break, which made Claude's prose look like a wall of broken
-      // lines on phone.) Paragraph separation comes from real blank lines.
-      return window.marked.parse(text, { gfm: true, breaks: false, async: false });
+      let html = window.marked.parse(text, { gfm: true, breaks: false, async: false });
+      // Wrap each <table> in a horizontally scrollable container so wide
+      // tables (especially the 3-4 column ones with long Chinese cells)
+      // don't blow up the narrow phone layout. Cells can wrap too thanks
+      // to CSS, but if a row is genuinely too wide the user can swipe.
+      html = html.replace(/<table>/g, '<div class="table-wrap"><table>')
+                 .replace(/<\/table>/g, '</table></div>');
+      return html;
     } catch {
       return `<pre>${escapeHtml(text)}</pre>`;
     }

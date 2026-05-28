@@ -221,18 +221,49 @@ main#messages {
   border-left: 2px solid var(--border);
   color: var(--muted);
 }
-.body table {
+/* Tables. We wrap them in a horizontally scrollable container in JS
+   (markdown parser doesn't emit a wrapper). The table itself can be
+   wider than the message body — on narrow phones the user swipes
+   sideways instead of cells collapsing into a broken stack. */
+.body .table-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  max-width: 100%;
+  margin: 0.6em 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+}
+.body .table-wrap > table {
   border-collapse: collapse;
-  margin: 0.55em 0;
-  font-size: 0.92em;
-  width: 100%;
+  font-size: 0.86em;
+  margin: 0;            /* override generic body table */
+  width: auto;          /* let it grow past container width */
+  min-width: 100%;
 }
-.body th, .body td {
+.body .table-wrap th, .body .table-wrap td {
   border-bottom: 1px solid var(--border);
-  padding: 5px 8px;
+  padding: 6px 10px;
   text-align: left;
+  white-space: nowrap;
+  vertical-align: top;
+  /* very long Chinese sentences in cells stay readable: hard line on
+     spaces and CJK boundaries; otherwise allow break-anywhere as fallback */
+  max-width: 70vw;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  white-space: normal;  /* prefer wrapping inside cells over very wide cells */
 }
-.body th { color: var(--muted); font-weight: 600; }
+.body .table-wrap th {
+  color: var(--muted);
+  font-weight: 600;
+  background: var(--surface-2);
+  position: sticky;
+  top: 0;
+}
+.body .table-wrap tr:last-child td { border-bottom: none; }
+/* Bare (un-wrapped) tables — fallback so old rendered HTML doesn't blow up */
+.body table { border-collapse: collapse; margin: 0.55em 0; font-size: 0.9em; }
 
 .body code {
   font-family: var(--mono); font-size: 0.86em;
