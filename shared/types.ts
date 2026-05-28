@@ -8,7 +8,7 @@ export type ClientMessage =
   | { type: 'interrupt' }
   | { type: 'select_session'; sessionId: string | null; cwd?: string }
   | { type: 'tool_response'; toolUseId: string; decision: 'allow' | 'deny'; allowRestOfTurn?: boolean }
-  | { type: 'set_settings'; autoApproveTools?: boolean; effort?: EffortLevel }
+  | { type: 'set_settings'; autoApproveTools?: boolean; effort?: EffortLevel; perToolAuto?: Record<string, boolean> }
   | { type: 'log'; level: 'info' | 'warn' | 'error' | 'ok'; message: string; ts?: number };
 
 export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
@@ -16,6 +16,9 @@ export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export type AgentSettings = {
   autoApproveTools: boolean;
   effort: EffortLevel;
+  // Per-tool auto-approve rules: tool name → auto-allow. Wildcard '*' means
+  // "all tools". autoApproveTools (above) is shorthand for `'*': true`.
+  perToolAuto?: Record<string, boolean>;
 };
 
 // Base64 image data — `data` is the bare base64 (no "data:..." prefix).
@@ -86,7 +89,7 @@ export type UpdateSessionRequest = { name?: string | null };
 // stripped of system-only wrappers (<local-command-caveat>, <command-name> …)
 // and de-noised for direct rendering.
 export type HistoryMessage =
-  | { role: 'user'; text: string }
+  | { role: 'user'; text: string; images?: ImageAttachment[] }
   | { role: 'assistant'; text: string }
   | { role: 'tool_use'; toolUseId: string; name: string; input: unknown }
   | { role: 'tool_result'; toolUseId: string; content: string; isError: boolean };

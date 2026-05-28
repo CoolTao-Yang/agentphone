@@ -30,7 +30,12 @@
   const $chips      = document.getElementById('attach-chips');
   const $tts        = document.getElementById('tts-toggle');
   const $autoBtn    = document.getElementById('auto-toggle');
+  const $effortChip = document.getElementById('effort-chip');
+  const $effortMenu = document.getElementById('effort-menu');
+  const $effortBd   = document.getElementById('effort-menu-bd');
   const $debugBtn   = document.getElementById('debug-toggle');
+  const $bannerRow  = document.getElementById('banner-row');
+  const $searchBox  = document.getElementById('session-search');
   const $debug      = document.getElementById('debug');
   const $dot        = document.getElementById('status-dot');
   const $statusText = document.getElementById('status-text');
@@ -74,6 +79,16 @@
     $autoBtn.title = settings.autoApproveTools
       ? '自动批准工具调用 (yolo) — 已开 · 点击关闭'
       : '自动批准工具调用 (yolo) — 关 · 点击开启';
+    // effort chip
+    if ($effortChip) {
+      $effortChip.textContent = settings.effort || 'max';
+      $effortChip.classList.toggle('is-max', settings.effort === 'max');
+    }
+    if ($effortMenu) {
+      $effortMenu.querySelectorAll('li').forEach((li) => {
+        li.classList.toggle('is-active', li.getAttribute('data-effort') === settings.effort);
+      });
+    }
   }
 
   // streaming text state per (messageId:blockIndex)
@@ -93,17 +108,52 @@
     if (!window.marked) return `<pre>${escapeHtml(text)}</pre>`;
     try {
       let html = window.marked.parse(text, { gfm: true, breaks: false, async: false });
-      // Wrap each <table> in a horizontally scrollable container so wide
-      // tables (especially the 3-4 column ones with long Chinese cells)
-      // don't blow up the narrow phone layout. Cells can wrap too thanks
-      // to CSS, but if a row is genuinely too wide the user can swipe.
       html = html.replace(/<table>/g, '<div class="table-wrap"><table>')
                  .replace(/<\/table>/g, '</table></div>');
+      // #2 Inject a copy button into every <pre> so phone users don't have
+      // to hold-select code blocks. We use a unique attribute marker so
+      // the click handler can find them.
+      html = html.replace(/<pre>/g, '<pre><button type="button" class="pre-copy" aria-label="复制">📋</button>');
       return html;
     } catch {
       return `<pre>${escapeHtml(text)}</pre>`;
     }
   }
+
+  // Delegated click handler for copy buttons (works for both live + replay).
+  document.addEventListener('click', (e) => {
+    const t = e.target;
+    if (!(t instanceof HTMLElement) || !t.classList.contains('pre-copy')) return;
+    const pre = t.closest('pre');
+    if (!pre) return;
+    const code = pre.querySelector('code');
+    const text = (code ? code.textContent : pre.textContent) || '';
+    const flash = () => {
+      t.classList.add('copied');
+      t.textContent = '✓';
+      setTimeout(() => { t.classList.remove('copied'); t.textContent = '📋'; }, 1200);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(flash).catch(() => {
+        showToast('复制失败 — 浏览器不支持？', 'error', 2500);
+      });
+    } else {
+      // very old fallback
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed'; ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        flash();
+      } catch {
+        showToast('复制失败', 'error', 2500);
+      }
+    }
+    e.stopPropagation();
+  });
   function highlightInside(root) {
     if (!window.hljs) return;
     root.querySelectorAll('pre code:not(.hljs)').forEach((el) => {
@@ -227,8 +277,11 @@
   function scheduleRender(state) {
     if (state.pendingRender) return;
     state.pendingRender = true;
+    // #3: bumped from 100ms → 200ms — long replies (multi-KB markdown +
+    // hljs) were burning CPU on every token; 200ms is still smooth and
+    // gives ~5 renders/sec instead of 10.
     const elapsed = Date.now() - state.lastRender;
-    const wait = elapsed < 100 ? 100 - elapsed : 0;
+    const wait = elapsed < 200 ? 200 - elapsed : 0;
     setTimeout(() => {
       state.pendingRender = false;
       state.lastRender = Date.now();
@@ -389,7 +442,22 @@
       denyBtn.className = 'tool-btn deny';
       denyBtn.textContent = '✗ 拒绝';
 
+      // #5: per-tool "永久 auto" checkbox — persists across turns
+      const labelForever = document.createElement('label');
+      const cbForever = document.createElement('input');
+      cbForever.type = 'checkbox';
+      const lt2 = document.createElement('span');
+      lt2.textContent = `以后 ${toolName} 自动 approve`;
+      labelForever.appendChild(cbForever);
+      labelForever.appendChild(lt2);
+
       allowBtn.addEventListener('click', () => {
+        if (cbForever.checked) {
+          // persist server-side via settings
+          const update = {};
+          update[toolName] = true;
+          sendWS({ type: 'set_settings', perToolAuto: update });
+        }
         sendWS({ type: 'tool_response', toolUseId, decision: 'allow', allowRestOfTurn: cb.checked });
         markToolResolved(toolUseId, 'allow');
       });
@@ -399,6 +467,7 @@
       });
 
       approveBox.appendChild(labelAll);
+      approveBox.appendChild(labelForever);
       approveBox.appendChild(denyBtn);
       approveBox.appendChild(allowBtn);
       card.appendChild(approveBox);
@@ -517,6 +586,7 @@
       case 'tool_result':
         return onToolResult(evt.toolUseId, evt.content, evt.isError);
       case 'result':
+        fireDoneNotification(evt);
         return appendResult(evt);
     }
   }
@@ -655,9 +725,27 @@
     return new Date(ms).toLocaleDateString();
   }
 
+  let allSessions = [];
+
   function renderSessionList(sessions) {
+    allSessions = sessions || [];
+    applySessionFilter();
+  }
+
+  function applySessionFilter() {
+    const q = ($searchBox ? $searchBox.value : '').trim().toLowerCase();
+    const filtered = q
+      ? allSessions.filter((s) => {
+          const hay = `${s.name || ''} ${s.cwd || ''} ${s.preview || ''} ${s.sessionId || ''}`.toLowerCase();
+          return hay.includes(q);
+        })
+      : allSessions;
+    drawSessionRows(filtered);
+  }
+
+  function drawSessionRows(sessions) {
     if (!sessions.length) {
-      $sessionList.innerHTML = `<div class="empty" style="padding:24px 16px;font-size:12px;">还没有 session<br><span style="opacity:.65;">点 "+ 新建"</span></div>`;
+      $sessionList.innerHTML = `<div class="empty" style="padding:24px 16px;font-size:12px;">${allSessions.length ? '无匹配 session' : '还没有 session<br><span style="opacity:.65;">点 "+ 新建"</span>'}</div>`;
       return;
     }
     $sessionList.innerHTML = '';
@@ -776,7 +864,7 @@
 
       for (const m of msgs) {
         if (m.role === 'user') {
-          appendUser(m.text);
+          appendUser(m.text, m.images);
         } else if (m.role === 'assistant') {
           renderHistoricalAssistant(m.text);
         } else if (m.role === 'tool_use') {
@@ -921,6 +1009,14 @@
     const text = $input.value.trim();
     if (!text && pendingImages.length === 0) return;
     if (busy || !ws || ws.readyState !== 1) return;
+
+    // #14: client-side image total size cap
+    const totalBytes = pendingImages.reduce((s, im) => s + Math.ceil(im.data.length * 3 / 4), 0);
+    if (totalBytes > 20 * 1024 * 1024) {
+      showToast('图片总大小超过 20MB', 'error', 3000);
+      return;
+    }
+
     const imgs = pendingImages.slice();
     appendUser(text, imgs);
     sendWS({ type: 'prompt', text, images: imgs.length ? imgs : undefined });
@@ -929,6 +1025,9 @@
     renderChips();
     autoResize();
     setBusy(true);
+
+    // First send is a good moment to ask for notification permission.
+    requestNotifyOnFirstSend();
 
     if (pendingLabel) {
       pendingLabelApplyOnSessionInit();
@@ -1268,6 +1367,8 @@
     setStatus('error', '缺 token');
     appendError('URL 缺少 ?token=… 参数。请使用 server 启动时打印的完整地址。');
   } else {
+    maybeShowHttpsBanner();
+    maybeAskNotifyPermission();
     initSTT();
     connect();
   }

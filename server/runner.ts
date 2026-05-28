@@ -105,7 +105,16 @@ export class TurnRunner {
   }
 
   /** Start a turn. Throws if one is already active. */
-  start(opts: { prompt: string; images?: import('../shared/types.ts').ImageAttachment[]; cwd: string; sessionId: string | null; effort?: EffortLevel; autoApproveAllTools?: boolean }): string {
+  start(opts: {
+    prompt: string;
+    images?: import('../shared/types.ts').ImageAttachment[];
+    cwd: string;
+    sessionId: string | null;
+    effort?: EffortLevel;
+    autoApproveAllTools?: boolean;
+    /** Per-tool auto-approve list — names that bypass approval. */
+    autoApproveTools?: Record<string, boolean>;
+  }): string {
     if (this.active) throw new Error('上一个对话还在进行');
 
     this.buffer = [];
@@ -114,13 +123,16 @@ export class TurnRunner {
     this.startedAtMs = Date.now();
 
     const autoApproveAll = !!opts.autoApproveAllTools;
+    const perToolAuto = opts.autoApproveTools ?? {};
 
     const canUseTool: CanUseToolFn = async (toolName, input) => {
       const toolUseId = randomUUID();
 
-      // Global auto-approve (= "auto mode" on phone) or per-tool/per-turn
-      // approval set both result in immediate allow without prompting.
-      if (autoApproveAll || this.approveAllForTurn.has(toolName)) {
+      // Auto-approve sources, in order:
+      //   1. global ⚡ auto mode (autoApproveAll)
+      //   2. per-tool setting (perToolAuto[toolName] === true)
+      //   3. "本轮全 approve" already given for this tool name
+      if (autoApproveAll || perToolAuto[toolName] === true || this.approveAllForTurn.has(toolName)) {
         this.record({
           kind: 'agent_event',
           event: { kind: 'tool_request', toolUseId, toolName, input, autoApproved: true },

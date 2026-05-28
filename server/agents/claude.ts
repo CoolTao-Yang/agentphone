@@ -313,11 +313,20 @@ export class ClaudeAgent implements Agent {
       if (obj.type === 'user' && obj.message?.content) {
         const content = obj.message.content;
         if (Array.isArray(content)) {
+          // Collect text + images from the same user message into a single
+          // user history entry so the phone can render them together.
+          let userText = '';
+          const userImages: { mediaType: any; data: string }[] = [];
           for (const block of content) {
             if (!block || typeof block !== 'object') continue;
             if (block.type === 'text') {
               const cleaned = cleanUserText(String(block.text || ''));
-              if (cleaned) messages.push({ role: 'user', text: cleaned });
+              if (cleaned) userText = userText ? userText + '\n' + cleaned : cleaned;
+            } else if (block.type === 'image' && block.source?.type === 'base64' && typeof block.source.data === 'string') {
+              userImages.push({
+                mediaType: block.source.media_type || 'image/png',
+                data: block.source.data,
+              });
             } else if (block.type === 'tool_result' && typeof block.tool_use_id === 'string') {
               messages.push({
                 role: 'tool_result',
@@ -326,6 +335,13 @@ export class ClaudeAgent implements Agent {
                 isError: !!block.is_error,
               });
             }
+          }
+          if (userText || userImages.length) {
+            messages.push({
+              role: 'user',
+              text: userText,
+              ...(userImages.length ? { images: userImages as any } : {}),
+            });
           }
         } else if (typeof content === 'string') {
           const cleaned = cleanUserText(content);

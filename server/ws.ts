@@ -20,6 +20,7 @@ import { defaultAgent, ownerOfSession } from './agents/registry.ts';
 let agentSettings: AgentSettings = {
   autoApproveTools: false,
   effort: 'max',
+  perToolAuto: {},
 };
 
 // Where the phone-side log() output ends up. Tail this for live phone state:
@@ -188,9 +189,9 @@ function createHandler(c: any, cfg: Cfg) {
         if (msg.effort) {
           agentSettings.effort = msg.effort;
         }
-        // Broadcast the new settings to ALL listeners so other devices
-        // see it. We bounce through the runner's listeners by sending a
-        // settings message directly — runner doesn't need to know.
+        if (msg.perToolAuto) {
+          agentSettings.perToolAuto = { ...(agentSettings.perToolAuto ?? {}), ...msg.perToolAuto };
+        }
         send({ type: 'settings', settings: agentSettings });
         return;
       }
@@ -198,6 +199,15 @@ function createHandler(c: any, cfg: Cfg) {
       if (msg.type === 'prompt') {
         if (r.isActive()) {
           send({ type: 'error', message: '上一个对话还在进行' });
+          return;
+        }
+        // #14: cap total image payload to 20MB (5MB per image × 4 max)
+        const totalImageBytes = (msg.images ?? []).reduce(
+          (s, im) => s + Math.ceil((im.data.length * 3) / 4),
+          0,
+        );
+        if (totalImageBytes > 20 * 1024 * 1024) {
+          send({ type: 'error', message: '图片总大小超过 20MB' });
           return;
         }
         try {
@@ -208,6 +218,7 @@ function createHandler(c: any, cfg: Cfg) {
             sessionId: currentSessionId,
             effort: agentSettings.effort,
             autoApproveAllTools: agentSettings.autoApproveTools,
+            autoApproveTools: agentSettings.perToolAuto,
           });
         } catch (err) {
           send({ type: 'error', message: err instanceof Error ? err.message : String(err) });

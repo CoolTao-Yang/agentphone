@@ -46,10 +46,13 @@
         <span class="h-dot" id="status-dot"></span>
         <span id="status-text">连接中</span>
       </span>
+      <button class="h-btn h-effort" id="effort-chip" title="thinking effort">max</button>
       <button class="h-btn" id="auto-toggle" aria-pressed="false" title="自动批准工具调用 (yolo)">⚡</button>
       <button class="h-btn" id="tts-toggle" aria-pressed="false" title="朗读回复">🔈</button>
       <button class="h-btn" id="debug-toggle" aria-pressed="false" title="调试日志">⚙</button>
     </header>
+
+    <div class="banner-row" id="banner-row"></div>
 
     <main id="messages">
       <div class="empty" id="empty">
@@ -80,6 +83,10 @@
       <button class="h-btn" id="close-drawer" title="关闭">←</button>
       <h2>sessions</h2>
       <button class="drawer-new" id="new-session">+ 新建</button>
+    </div>
+    <div class="drawer-search">
+      <input type="text" id="session-search" placeholder="搜索 (label / cwd / 首句)"
+             autocomplete="off" autocapitalize="off" spellcheck="false">
     </div>
     <div class="drawer-list" id="session-list">
       <div class="empty" style="padding:24px 16px;font-size:12px;">加载中…</div>
@@ -118,6 +125,16 @@
       </div>
     </div>
   </div>
+
+  <!-- effort dropdown menu -->
+  <div class="menu-backdrop" id="effort-menu-bd"></div>
+  <ul class="menu" id="effort-menu" role="menu">
+    <li data-effort="low">low</li>
+    <li data-effort="medium">medium</li>
+    <li data-effort="high">high</li>
+    <li data-effort="xhigh">xhigh</li>
+    <li data-effort="max">max</li>
+  </ul>
 
   <!-- toast + debug overlay -->
   <div class="toast" id="toast"></div>

@@ -88,6 +88,28 @@ if (!CLAUDE_CONFIG_DIR) {
 const app = new Hono();
 const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
 
+// #13: simple per-IP rate limit on REST + WS handshake. Bypassed for the
+// static file path because we want PWA loads to be instant.
+const rlBuckets = new Map<string, { count: number; resetAt: number }>();
+const RL_WINDOW_MS = 60_000;
+const RL_MAX = 240;  // 4/s sustained; bursts fine for normal use
+app.use('/api/*', async (c, next) => {
+  const ip = c.req.header('x-forwarded-for')?.split(',')[0]?.trim()
+    || (c.req as any).raw?.socket?.remoteAddress
+    || 'unknown';
+  const now = Date.now();
+  const b = rlBuckets.get(ip);
+  if (!b || now >= b.resetAt) {
+    rlBuckets.set(ip, { count: 1, resetAt: now + RL_WINDOW_MS });
+  } else {
+    b.count++;
+    if (b.count > RL_MAX) {
+      return c.json({ error: 'rate limited' }, 429);
+    }
+  }
+  return next();
+});
+
 mountSessionApi(app, TOKEN);
 mountWebSocket(app, upgradeWebSocket, { TOKEN, DEFAULT_CWD });
 
