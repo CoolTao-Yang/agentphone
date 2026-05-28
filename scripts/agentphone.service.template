@@ -7,7 +7,12 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=__INSTALL_DIR__
 EnvironmentFile=-__HOME__/.config/agentphone/env
-ExecStart=/usr/bin/env npm start
+# Source nvm.sh directly so the systemd (non-interactive, minimal PATH)
+# environment can find node/npm. `bash -lc` is not enough because -l
+# sources only ~/.profile, and most setups put nvm init in ~/.bashrc.
+# `exec` replaces the bash shell so systemd tracks the npm PID for
+# Restart= logic.
+ExecStart=/bin/bash -c 'source ~/.nvm/nvm.sh && exec npm start'
 Restart=on-failure
 RestartSec=5s
 StandardOutput=journal
