@@ -436,6 +436,15 @@
         return onThinkingDelta(evt);
       case 'assistant_block_end':
         return onAssistantBlockEnd(evt);
+      case 'tool_request':
+        return appendToolRequest(evt.toolUseId, evt.toolName, evt.input, !!evt.autoApproved);
+      case 'tool_decision': {
+        const entry = toolCards.get(evt.toolUseId);
+        if (entry && !entry.resolved) {
+          markToolResolved(evt.toolUseId, evt.allowed ? 'allow' : 'deny');
+        }
+        return;
+      }
       case 'tool_result':
         return onToolResult(evt.toolUseId, evt.content, evt.isError);
       case 'result':
@@ -477,7 +486,19 @@
           setAccountDisplay(m.claudeAccount);
           currentSessionId = m.currentSessionId;
           log('ok', `connected, account=${m.claudeAccount}, cwd=${m.currentCwd}`);
-          // load sessions in background
+          // If a turn is still in-flight on the server (we disconnected
+          // mid-conversation), replay the buffered events and reattach.
+          if (m.activeTurn && m.activeTurn.events && m.activeTurn.events.length) {
+            clearMessages();
+            for (const e of m.activeTurn.events) dispatchAgentEvent(e);
+            const sec = Math.max(1, Math.round((Date.now() - m.activeTurn.startedAt) / 1000));
+            const sep = document.createElement('div');
+            sep.className = 'history-sep';
+            sep.textContent = `── 已恢复 ${m.activeTurn.events.length} 条事件（${sec}s 前开始）· server 还在跑 ──`;
+            $messages.appendChild(sep);
+            setBusy(true); // server is still streaming
+            showToast(`已恢复进行中的对话`, 'ok', 2500);
+          }
           loadSessions();
           loadRecentCwds();
           break;
@@ -488,9 +509,6 @@
           break;
         case 'agent_event':
           dispatchAgentEvent(m.event);
-          break;
-        case 'tool_request':
-          appendToolRequest(m.toolUseId, m.toolName, m.input, !!m.autoApproved);
           break;
         case 'turn_done':
           setBusy(false);
@@ -569,6 +587,11 @@
       const name = document.createElement('div');
       name.className = 'si-name' + (s.name ? '' : ' unnamed');
       name.textContent = s.name || '(未命名)';
+      const agent = s.agent || 'claude';
+      const badge = document.createElement('span');
+      badge.className = `agent-badge agent-${agent}`;
+      badge.textContent = agent;
+      name.appendChild(badge);
 
       const cwd = document.createElement('div');
       cwd.className = 'si-cwd';

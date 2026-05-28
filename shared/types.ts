@@ -13,11 +13,17 @@ export type ClientMessage =
 // WebSocket: server → client
 // ────────────────────────────────────────────────────────────────
 export type ServerMessage =
-  | { type: 'connected'; defaultCwd: string; currentCwd: string; currentSessionId: string | null; claudeAccount: string }
+  | {
+      type: 'connected';
+      defaultCwd: string;
+      currentCwd: string;
+      currentSessionId: string | null;
+      claudeAccount: string;
+      activeTurn: ActiveTurnState | null;
+    }
   | { type: 'unauthorized' }
   | { type: 'session_set'; sessionId: string | null; cwd: string }
   | { type: 'agent_event'; event: AgentEvent }
-  | { type: 'tool_request'; toolUseId: string; toolName: string; input: unknown; autoApproved?: boolean }
   | { type: 'turn_done' }
   | { type: 'error'; message: string };
 
@@ -29,6 +35,8 @@ export type AgentEvent =
   | { kind: 'text_delta'; messageId: string; blockIndex: number; delta: string }
   | { kind: 'thinking_delta'; messageId: string; blockIndex: number; delta: string }
   | { kind: 'assistant_block_end'; messageId: string; blockIndex: number }
+  | { kind: 'tool_request'; toolUseId: string; toolName: string; input: unknown; autoApproved: boolean }
+  | { kind: 'tool_decision'; toolUseId: string; allowed: boolean }
   | { kind: 'tool_result'; toolUseId: string; content: string; isError: boolean }
   | { kind: 'result'; success: boolean; durationMs: number; turns: number; costUsd: number; isError: boolean };
 
@@ -42,6 +50,13 @@ export type SessionSummary = {
   preview: string;
   lastUsed: number; // unix ms
   turns: number;
+  agent: 'claude' | 'codex' | 'cursor';
+};
+
+export type ActiveTurnState = {
+  turnId: string;
+  startedAt: number;
+  events: AgentEvent[]; // includes tool_request entries; pending = tool_request not yet followed by tool_decision
 };
 
 export type RecentCwdsResponse = { cwds: string[] };
