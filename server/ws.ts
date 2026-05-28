@@ -18,8 +18,7 @@ import { appendFile, stat, writeFile } from 'node:fs/promises';
 import type { Hono } from 'hono';
 import type { AgentSettings, ClientMessage, ExternalSessionStatus, ServerMessage } from '../shared/types.ts';
 import { TurnRunner } from './runner.ts';
-import { defaultAgent, ownerOfSession } from './agents/registry.ts';
-import { externalSessions } from './external-sessions.ts';
+import { defaultAgent, externalSessions, ownerOfSession } from './harness/registry.ts';
 
 function externalStatusFor(sessionId: string | null): ExternalSessionStatus | null {
   if (!sessionId) return null;

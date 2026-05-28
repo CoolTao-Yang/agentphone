@@ -22,7 +22,7 @@ import type {
   Agent,
   AgentTurn,
   CanUseToolFn,
-} from './agents/types.ts';
+} from './harness/types.ts';
 
 // Everything that flows out of the runner. We unify under one shape so the
 // replay buffer is a flat list. tool_request is an AgentEvent kind too — the

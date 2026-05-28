@@ -9,7 +9,7 @@ import { createNodeWebSocket } from '@hono/node-ws';
 import { Hono } from 'hono';
 import { mountWebSocket } from './ws.ts';
 import { mountSessionApi } from './sessions.ts';
-import { externalSessions } from './external-sessions.ts';
+import { externalSessions } from './harness/registry.ts';
 
 // Token resolution order:
 //   1. PHONE_AGENT_TOKEN env var (caller overrides everything)

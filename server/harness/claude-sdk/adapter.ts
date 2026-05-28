@@ -1,5 +1,7 @@
-// ClaudeAgent — drives @anthropic-ai/claude-agent-sdk and translates the
-// SDK's Beta-event stream into our normalized AgentEvent shape.
+// ClaudeSdkAdapter — drives @anthropic-ai/claude-agent-sdk and translates the
+// SDK's Beta-event stream into our normalized AgentEvent shape. Mode = 'owned':
+// we spawn the underlying claude.exe ourselves, no one else races for assistant
+// writes on these session jsonls.
 
 import { existsSync } from 'node:fs';
 import { readdir, readFile, stat, unlink } from 'node:fs/promises';
@@ -17,8 +19,14 @@ import type {
   HistoryMessage,
   SessionMessagesResponse,
   SessionSummary,
-} from '../../shared/types.ts';
-import type { Agent, AgentKind, AgentTurn, StartTurnOptions } from './types.ts';
+} from '../../../shared/types.ts';
+import type {
+  AgentKind,
+  AgentTurn,
+  HarnessAdapter,
+  HarnessKind,
+  StartTurnOptions,
+} from '../types.ts';
 
 const HOME = homedir();
 const PROJECT_ROOTS = [
@@ -105,7 +113,11 @@ async function findSessionFile(sessionId: string): Promise<string | null> {
   return best?.path ?? null;
 }
 
-export class ClaudeAgent implements Agent {
+export class ClaudeSdkAdapter implements HarnessAdapter {
+  readonly harnessKind: HarnessKind = 'claude-sdk';
+  readonly agentKind: AgentKind = 'claude';
+  readonly mode = 'owned' as const;
+  // Back-compat alias for the old `kind` field; some helpers still expect it.
   readonly kind: AgentKind = 'claude';
 
   startTurn(opts: StartTurnOptions): AgentTurn {

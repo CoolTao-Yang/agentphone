@@ -8,9 +8,8 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono, Context } from 'hono';
 import type { SessionMessagesResponse, SessionSummary } from '../shared/types.ts';
-import { agents, ownerOfSession } from './agents/registry.ts';
+import { agents, externalSessions, ownerOfSession } from './harness/registry.ts';
 import { activeSessionIds } from './ws.ts';
-import { externalSessions } from './external-sessions.ts';
 
 const CONFIG_DIR  = join(homedir(), '.config', 'agentphone');
 const LABELS_PATH = join(CONFIG_DIR, 'labels.json');
