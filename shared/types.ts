@@ -47,7 +47,7 @@ export type ServerMessage =
   | { type: 'ping'; ts: number }
   | { type: 'unauthorized' }
   | { type: 'session_set'; sessionId: string | null; cwd: string }
-  | { type: 'agent_event'; event: AgentEvent }
+  | { type: 'agent_event'; turnId: string; seq: number; event: AgentEvent }
   | { type: 'turn_done' }
   | { type: 'error'; message: string };
 
@@ -77,11 +77,21 @@ export type SessionSummary = {
   agent: 'claude' | 'codex' | 'cursor';
 };
 
+export type SeqEvent = {
+  seq: number;
+  event: AgentEvent;
+};
+
 export type ActiveTurnState = {
   turnId: string;
   startedAt: number;
-  events: AgentEvent[]; // includes tool_request entries; pending = tool_request not yet followed by tool_decision
-  done: boolean;        // true if the turn has already finished and the buffer is being kept around for replay
+  // Each event carries a monotonic seq number assigned by the server when
+  // emitted. Client tracks the highest seq it has rendered; on reconnect
+  // for the same turn it only appends events with seq > lastRenderedSeq
+  // instead of full-replaying. Includes tool_request entries; "pending"
+  // tool = tool_request not yet followed by tool_decision.
+  events: SeqEvent[];
+  done: boolean;
 };
 
 export type RecentCwdsResponse = { cwds: string[] };

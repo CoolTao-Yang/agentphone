@@ -78,12 +78,20 @@ async function test() {
   const connected2 = await awaitMessage(ws, m => m.type === 'connected', 'reconnected', 5_000);
   console.log(`  ✓ reconnected · activeTurn=${connected2.activeTurn ? 'present' : 'none'}`);
 
-  // ── 4. mid-turn disconnect + replay ─────────────────────────
-  console.log(`[${elapsed()}] test 4: disconnect mid-turn → reconnect → expect activeTurn replay`);
+  // ── 4. mid-turn disconnect + replay + seq numbering ─────────
+  console.log(`[${elapsed()}] test 4: mid-turn disconnect → reconnect → activeTurn replay + seq`);
   ws.send(JSON.stringify({ type: 'prompt', text: '回一个字: pong' }));
   console.log(`  → sent tiny prompt`);
   const firstEvt = await awaitMessage(ws, m => m.type === 'agent_event', 'first event', 30_000);
   console.log(`  ✓ first agent_event arrived (kind=${firstEvt.event?.kind || '?'})`);
+  if (typeof firstEvt.seq !== 'number') {
+    console.log(`  ✗ agent_event has no seq!`); process.exit(1);
+  }
+  if (!firstEvt.turnId) {
+    console.log(`  ✗ agent_event has no turnId!`); process.exit(1);
+  }
+  console.log(`  ✓ event carries seq=${firstEvt.seq} turnId=${firstEvt.turnId.slice(0,8)}`);
+  const firstTurnId = firstEvt.turnId;
   // Disconnect immediately — turn is still running on server.
   ws.close();
   console.log(`  → disconnected at ${elapsed()}`);
@@ -96,7 +104,18 @@ async function test() {
     process.exit(1);
   }
   const evs = connected3.activeTurn.events || [];
-  console.log(`  ✓ activeTurn present · ${evs.length} events buffered · done=${connected3.activeTurn.done}`);
+  if (connected3.activeTurn.turnId !== firstTurnId) {
+    console.log(`  ✗ activeTurn.turnId changed mid-stream (${firstTurnId.slice(0,8)} → ${connected3.activeTurn.turnId.slice(0,8)})`);
+    process.exit(1);
+  }
+  // Verify each event has a seq, monotonically increasing
+  let prev = -1;
+  for (const se of evs) {
+    if (typeof se?.seq !== 'number') { console.log('  ✗ event missing seq:', se); process.exit(1); }
+    if (se.seq <= prev) { console.log(`  ✗ seq not monotonic: ${prev} → ${se.seq}`); process.exit(1); }
+    prev = se.seq;
+  }
+  console.log(`  ✓ activeTurn replay: ${evs.length} events, seq 0..${prev}, turnId stable, done=${connected3.activeTurn.done}`);
 
   // Wait for turn to finish (or 20s)
   try {

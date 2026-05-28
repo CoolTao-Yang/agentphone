@@ -69,6 +69,8 @@
   let currentCwd = '';
   let defaultCwd = '';
   let renamingSessionId = null;
+  let lastTurnId = null;       // server-assigned turn id of the most recent agent_event we rendered
+  let lastRenderedSeq = -1;    // max seq we've already applied to the DOM for that turn
   /** @type {Array<{ data: string, mediaType: string, name?: string }>} */
   let pendingImages = [];
   /** @type {{ autoApproveTools: boolean, effort: string }} */
@@ -670,17 +672,36 @@
             `auto=${settings.autoApproveTools} · effort=${settings.effort} · ` +
             `turn=${m.activeTurn ? (m.activeTurn.done ? 'done' : 'running') : 'none'}`);
           if (m.activeTurn && m.activeTurn.events && m.activeTurn.events.length) {
-            clearMessages();
-            for (const e of m.activeTurn.events) dispatchAgentEvent(e);
+            const sameTurn = lastTurnId === m.activeTurn.turnId;
+            if (!sameTurn) {
+              // First sight of this turn (initial connect or different turn
+              // since last connection) — full replay.
+              clearMessages();
+              lastTurnId = m.activeTurn.turnId;
+              lastRenderedSeq = -1;
+            }
+            let appended = 0;
+            for (const se of m.activeTurn.events) {
+              if (se && typeof se.seq === 'number' && se.seq <= lastRenderedSeq) continue;
+              dispatchAgentEvent(se.event);
+              if (typeof se.seq === 'number') lastRenderedSeq = Math.max(lastRenderedSeq, se.seq);
+              appended++;
+            }
             const sec = Math.max(1, Math.round((Date.now() - m.activeTurn.startedAt) / 1000));
             const sep = document.createElement('div');
             sep.className = 'history-sep';
-            sep.textContent = m.activeTurn.done
-              ? `── 已恢复 ${m.activeTurn.events.length} 条事件（${sec}s 前完成）──`
-              : `── 已恢复 ${m.activeTurn.events.length} 条事件（${sec}s 前开始 · server 还在跑）──`;
+            sep.textContent = !sameTurn
+              ? (m.activeTurn.done
+                  ? `── 已恢复 ${m.activeTurn.events.length} 条事件（${sec}s 前完成）──`
+                  : `── 已恢复 ${m.activeTurn.events.length} 条事件（${sec}s 前开始 · server 还在跑）──`)
+              : `── 补齐 ${appended} 条新事件（断开 ${sec}s, 共 ${lastRenderedSeq+1} 条）──`;
             $messages.appendChild(sep);
             setBusy(!m.activeTurn.done);
-            showToast(m.activeTurn.done ? '已恢复（已完成）' : '已恢复进行中的对话', 'ok', 2500);
+            showToast(
+              !sameTurn ? (m.activeTurn.done ? '已恢复（已完成）' : '已恢复进行中的对话')
+                        : `补齐 ${appended} 条`,
+              'ok', 2200
+            );
           } else {
             // Safety: clear any stale busy state from before disconnect.
             setBusy(false);
@@ -694,6 +715,15 @@
           log('info', 'session set ' + (m.sessionId ? m.sessionId.slice(0,8) : '(new)') + ' cwd=' + m.cwd);
           break;
         case 'agent_event':
+          if (m.turnId && m.turnId !== lastTurnId) {
+            // Server started a new turn since we last rendered — reset.
+            lastTurnId = m.turnId;
+            lastRenderedSeq = -1;
+          }
+          if (typeof m.seq === 'number') {
+            if (m.seq <= lastRenderedSeq) break;  // dedup
+            lastRenderedSeq = m.seq;
+          }
           dispatchAgentEvent(m.event);
           break;
         case 'turn_done':
@@ -958,6 +988,8 @@
     streamState.clear();
     toolCards.clear();
     $messages.innerHTML = '';
+    lastTurnId = null;
+    lastRenderedSeq = -1;
     const e = document.createElement('div');
     e.className = 'empty'; e.id = 'empty';
     e.textContent = '新对话';

@@ -141,9 +141,11 @@ function createHandler(c: any, cfg: Cfg) {
           }
         }
         switch (emit.kind) {
-          case 'agent_event':
-            send({ type: 'agent_event', event: emit.event });
+          case 'agent_event': {
+            const tid = r.turnId() || '';
+            send({ type: 'agent_event', turnId: tid, seq: emit.seq, event: emit.event });
             return;
+          }
           case 'turn_done':
             send({ type: 'turn_done' });
             return;

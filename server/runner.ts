@@ -28,8 +28,12 @@ import type {
 // replay buffer is a flat list. tool_request is an AgentEvent kind too — the
 // distinction from 'pending vs resolved' is recovered by whether a matching
 // tool_decision follows it in the stream.
+//
+// Every agent_event carries a monotonic seq (reset to 0 at turn start) so
+// clients can do delta replay on reconnect instead of re-rendering the
+// whole turn.
 export type RunnerEmit =
-  | { kind: 'agent_event'; event: AgentEvent }
+  | { kind: 'agent_event'; event: AgentEvent; seq: number }
   | { kind: 'turn_done' }
   | { kind: 'error'; message: string };
 
@@ -41,6 +45,7 @@ export class TurnRunner {
   private active: AgentTurn | null = null;
   private currentTurnId: string | null = null;
   private startedAtMs = 0;
+  private seqCounter = 0;
 
   // Replay buffer — all emits for the current turn. Cleared at the start
   // of each new turn so we don't accumulate forever.
@@ -72,14 +77,20 @@ export class TurnRunner {
    *  We keep the buffer around AFTER the turn completes too — that way a
    *  phone whose network died mid-stream can reconnect after the turn
    *  finishes and still see the full reply. The buffer is reset only when
-   *  a new turn starts. */
-  activeState(): ActiveTurnState | null {
+   *  a new turn starts.
+   *
+   *  `sinceSeq` lets the client request only events newer than what it has
+   *  already rendered — used during in-turn reconnects to avoid wiping +
+   *  re-rendering the whole conversation. Omit / -1 to get everything. */
+  activeState(sinceSeq: number = -1): ActiveTurnState | null {
     if (!this.currentTurnId) return null;
-    const events: AgentEvent[] = [];
+    const events: import('../shared/types.ts').SeqEvent[] = [];
     for (const e of this.buffer) {
-      if (e.kind === 'agent_event') events.push(e.event);
+      if (e.kind === 'agent_event' && e.seq > sinceSeq) {
+        events.push({ seq: e.seq, event: e.event });
+      }
     }
-    if (events.length === 0) return null;
+    if (events.length === 0 && this.buffer.length === 0) return null;
     return {
       turnId: this.currentTurnId,
       startedAt: this.startedAtMs,
@@ -91,6 +102,10 @@ export class TurnRunner {
   subscribe(l: RunnerListener): () => void {
     this.listeners.add(l);
     return () => { this.listeners.delete(l); };
+  }
+
+  private nextSeq(): number {
+    return this.seqCounter++;
   }
 
   private broadcast(e: RunnerEmit): void {
@@ -121,6 +136,7 @@ export class TurnRunner {
     this.pendingTools.clear();
     this.approveAllForTurn.clear();
     this.startedAtMs = Date.now();
+    this.seqCounter = 0;
 
     const autoApproveAll = !!opts.autoApproveAllTools;
     const perToolAuto = opts.autoApproveTools ?? {};
@@ -136,10 +152,12 @@ export class TurnRunner {
         this.record({
           kind: 'agent_event',
           event: { kind: 'tool_request', toolUseId, toolName, input, autoApproved: true },
+          seq: this.nextSeq(),
         });
         this.record({
           kind: 'agent_event',
           event: { kind: 'tool_decision', toolUseId, allowed: true },
+          seq: this.nextSeq(),
         });
         return { allow: true, updatedInput: input };
       }
@@ -152,6 +170,7 @@ export class TurnRunner {
             this.record({
               kind: 'agent_event',
               event: { kind: 'tool_decision', toolUseId, allowed: decision.allow },
+              seq: this.nextSeq(),
             });
             resolve({
               allow: decision.allow,
@@ -162,6 +181,7 @@ export class TurnRunner {
         this.record({
           kind: 'agent_event',
           event: { kind: 'tool_request', toolUseId, toolName, input, autoApproved: false },
+          seq: this.nextSeq(),
         });
       });
     };
@@ -182,7 +202,7 @@ export class TurnRunner {
     (async () => {
       try {
         for await (const event of turn.iterate()) {
-          this.record({ kind: 'agent_event', event });
+          this.record({ kind: 'agent_event', event, seq: this.nextSeq() });
         }
         this.record({ kind: 'turn_done' });
       } catch (err) {
