@@ -387,12 +387,9 @@
         <span class="h-dot" id="status-dot"></span>
         <span id="status-text">连接中</span>
       </span>
-      <button class="h-btn" id="refresh-btn" title="刷新当前 session（重拉历史 + session 列表）">🔄</button>
-      <button class="h-btn h-model" id="model-chip" title="模型（默认 = 账号默认）">默认</button>
-      <button class="h-btn h-effort" id="effort-chip" title="thinking effort">max</button>
-      <button class="h-btn" id="auto-toggle" aria-pressed="false" title="自动批准工具调用 (yolo)">⚡</button>
-      <button class="h-btn" id="tts-toggle" aria-pressed="false" title="朗读回复">🔈</button>
-      <button class="h-btn" id="debug-toggle" aria-pressed="false" title="调试日志">⚙</button>
+      <!-- Read-only glance of current model·effort; tap to open settings. -->
+      <button class="h-btn h-summary" id="settings-summary" title="当前模型 · effort（点击打开设置）">默认·max</button>
+      <button class="h-btn" id="settings-btn" title="设置" aria-label="设置">⚙</button>
     </header>
 
     <div class="banner-row" id="banner-row"></div>
@@ -469,19 +466,49 @@
     </div>
   </div>
 
-  <!-- effort dropdown menu -->
-  <div class="menu-backdrop" id="effort-menu-bd"></div>
-  <ul class="menu" id="effort-menu" role="menu">
-    <li data-effort="low">low</li>
-    <li data-effort="medium">medium</li>
-    <li data-effort="high">high</li>
-    <li data-effort="xhigh">xhigh</li>
-    <li data-effort="max">max</li>
-  </ul>
-
-  <!-- model dropdown menu (populated dynamically from /api/models) -->
-  <div class="menu-backdrop" id="model-menu-bd"></div>
-  <ul class="menu" id="model-menu" role="menu"></ul>
+  <!-- settings sheet — model picker (w/ descriptions) + effort + toggles. -->
+  <div class="sheet-backdrop" id="settings-bd"></div>
+  <section class="sheet" id="settings-sheet" role="dialog" aria-label="设置" aria-modal="true">
+    <header class="sheet-head">
+      <b>设置</b>
+      <button class="sheet-x" id="settings-close" type="button" aria-label="关闭">✕</button>
+    </header>
+    <div class="sheet-body">
+      <div class="sheet-section">
+        <div class="sheet-label">模型</div>
+        <!-- rows built dynamically from /api/models (name + description) -->
+        <ul class="model-list" id="model-list" role="radiogroup" aria-label="模型"></ul>
+      </div>
+      <div class="sheet-section" id="effort-section">
+        <div class="sheet-label">Effort（推理强度）</div>
+        <div class="seg" id="effort-seg" role="radiogroup" aria-label="effort">
+          <button type="button" data-effort="low">low</button>
+          <button type="button" data-effort="medium">medium</button>
+          <button type="button" data-effort="high">high</button>
+          <button type="button" data-effort="xhigh">xhigh</button>
+          <button type="button" data-effort="max">max</button>
+        </div>
+      </div>
+      <div class="sheet-section">
+        <div class="sheet-row">
+          <span class="sheet-row-label">⚡ 自动批准工具 (yolo)</span>
+          <button class="h-btn" id="auto-toggle" aria-pressed="false" title="自动批准工具调用 (yolo)">⚡</button>
+        </div>
+        <div class="sheet-row">
+          <span class="sheet-row-label">🔈 朗读回复</span>
+          <button class="h-btn" id="tts-toggle" aria-pressed="false" title="朗读回复">🔈</button>
+        </div>
+        <div class="sheet-row">
+          <span class="sheet-row-label">🐞 调试日志</span>
+          <button class="h-btn" id="debug-toggle" aria-pressed="false" title="调试日志">🐞</button>
+        </div>
+        <div class="sheet-row">
+          <span class="sheet-row-label">🔄 刷新当前 session</span>
+          <button class="h-btn" id="refresh-btn" title="刷新当前 session（重拉历史 + session 列表）">🔄</button>
+        </div>
+      </div>
+    </div>
+  </section>
 
   <!-- toast + debug overlay -->
   <div class="toast" id="toast"></div>

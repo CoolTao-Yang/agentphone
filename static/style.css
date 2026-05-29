@@ -146,6 +146,125 @@ header {
 }
 .h-model.is-set { color: var(--accent-2); border-color: var(--accent); }
 
+/* ── header summary chip (model·effort glance → opens settings) ── */
+/* button.h-summary (specificity 0,1,1) so width:auto beats the .h-btn
+   width rules in the mobile media queries (0,1,0) regardless of order. */
+button.h-summary {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  width: auto;
+  padding: 0 9px;
+  max-width: 132px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+}
+button.h-summary.is-set { color: var(--accent-2); border-color: var(--accent); }
+
+/* ── settings bottom sheet ─────────────────────────────────────── */
+.sheet-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.5);
+  opacity: 0; pointer-events: none;
+  transition: opacity .18s ease;
+  z-index: 95;
+}
+.sheet-backdrop.open { opacity: 1; pointer-events: auto; }
+.sheet {
+  position: fixed;
+  left: 50%; bottom: 0;
+  transform: translate(-50%, 100%);
+  width: 100%; max-width: 520px;
+  max-height: 82vh;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: 16px 16px 0 0;
+  box-shadow: 0 -8px 32px rgba(0,0,0,0.5);
+  z-index: 96;
+  display: flex; flex-direction: column;
+  transition: transform .22s cubic-bezier(.2,.7,.3,1);
+  padding-bottom: env(safe-area-inset-bottom, 0);
+}
+.sheet.open { transform: translate(-50%, 0); }
+.sheet-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 16px 10px;
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+.sheet-head b { font-size: 15px; }
+.sheet-x {
+  background: none; border: none; color: var(--muted);
+  font-size: 16px; cursor: pointer; padding: 4px 8px; line-height: 1;
+}
+.sheet-body { overflow-y: auto; padding: 4px 16px 18px; }
+.sheet-section { padding: 12px 0; border-bottom: 1px solid var(--border); }
+.sheet-section:last-child { border-bottom: none; }
+.sheet-section.hidden { display: none; }
+.sheet-label {
+  font-size: 11px; color: var(--muted); text-transform: uppercase;
+  letter-spacing: 0.06em; margin-bottom: 8px;
+}
+/* model radio list (name + description) */
+.model-list { list-style: none; margin: 0; padding: 0; }
+.model-list li {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 9px 10px; border-radius: 8px; cursor: pointer;
+  border: 1px solid transparent;
+}
+.model-list li:hover { background: var(--surface); }
+.model-list li.is-active { border-color: var(--accent); background: var(--surface); }
+.model-list .m-name {
+  font-family: var(--mono); font-size: 13px; color: var(--text);
+  display: flex; align-items: center; gap: 6px;
+}
+.model-list li.is-active .m-name { color: var(--accent-2); }
+.model-list li.is-active .m-name::after { content: '✓'; color: var(--accent); }
+.model-list .m-desc { font-size: 11.5px; color: var(--muted); line-height: 1.35; }
+/* effort segmented control */
+.seg { display: flex; gap: 4px; flex-wrap: wrap; }
+.seg button {
+  flex: 1 1 auto; min-width: 52px;
+  font-family: var(--mono); font-size: 12px;
+  padding: 7px 8px; border-radius: 7px;
+  background: var(--surface); color: var(--muted);
+  border: 1px solid var(--border); cursor: pointer;
+}
+.seg button.is-active { color: var(--accent-2); border-color: var(--accent); background: var(--bg); }
+.seg button[hidden] { display: none; }
+/* toggle rows */
+.sheet-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 2px;
+}
+.sheet-row-label { font-size: 13px; color: var(--text); }
+
+/* ── collapsible follow-mode pill ──────────────────────────────── */
+.banner.follow-mode .fb-head {
+  display: flex; align-items: center; gap: 7px; cursor: pointer;
+  width: 100%;
+}
+.banner.follow-mode .fb-chev {
+  color: var(--muted); transition: transform .15s ease; font-size: 11px;
+}
+.banner.follow-mode.expanded .fb-chev { transform: rotate(90deg); }
+.banner.follow-mode .fb-hint {
+  font-size: 10px; color: var(--muted); margin-left: auto; white-space: nowrap;
+}
+.banner.follow-mode.expanded .fb-hint { display: none; }
+.banner.follow-mode .fb-summary {
+  flex: 1 1 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.banner.follow-mode .fb-actions {
+  display: none; gap: 8px; flex-wrap: wrap; margin-top: 9px; align-items: center;
+}
+.banner.follow-mode.expanded .fb-actions { display: flex; }
+.banner.follow-mode .fb-note { font-size: 11px; color: var(--muted); flex: 1 1 100%; }
+
 /* HTTPS warning + other top-of-messages banners.
    Compact single-row layout: text ellipsizes, buttons never wrap.
    For "details/summary"-based banners (e.g. HTTPS-how-to), use
