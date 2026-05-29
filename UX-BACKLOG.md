@@ -15,8 +15,14 @@
 > command + description, Read/Grep/Glob a compact path line; everything else falls back to JSON.
 > Tool results cap at 16 lines with inline expand. Replaces the raw-JSON `<pre>` dump.
 >
-> Next unstarted high-value: #6 offline outbox · #8 rate-limit countdown · #9 drawer unread markers ·
-> #11 paste-image · #21 slash-command autocomplete.
+> **✅ SHIPPED 2026-05-29 (round 3):** #6 offline outbox — prompts/injects sent while the socket is
+> down are queued (rendered ⏳ 待发送), flushed in order on reconnect via onopen→flushOutbox. One
+> prompt queued at a time (avoids concurrent-turn rejection); a queued prompt bound to a session the
+> user switched away from is cancelled rather than mis-sent. In-memory (survives network blips; an
+> OS app-kill is #12's territory).
+>
+> Next unstarted high-value: #8 rate-limit countdown · #9 drawer unread markers · #11 paste-image ·
+> #21 slash-command autocomplete.
 
 # agentphone UX Optimization Backlog
 

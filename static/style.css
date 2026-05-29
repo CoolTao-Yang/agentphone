@@ -1496,3 +1496,13 @@ footer {
   -webkit-tap-highlight-color: transparent;
 }
 .diff-more:active { background: var(--surface); }
+
+/* Offline-queued user message (UX-BACKLOG #6) */
+.msg.user.pending { opacity: 0.6; }
+.msg.user.pending .body { border-left: 2px dashed var(--warn); padding-left: 8px; }
+.pending-tag {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--warn);
+  font-weight: 400;
+}

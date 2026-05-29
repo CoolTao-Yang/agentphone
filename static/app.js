@@ -784,6 +784,7 @@
     div.appendChild(body);
     $messages.appendChild(div);
     autoScroll();
+    return div;
   }
 
   // ─── tool cards ───────────────────────────────────────────────
@@ -1332,6 +1333,9 @@
       reconnectAttempts = 0;
       setStatus('connected', '已连接');
       log('ok', 'ws open');
+      // Flush anything queued while offline (UX-BACKLOG #6). The WS reconnect
+      // URL carries ?session= so the server attaches to the right runner.
+      flushOutbox();
     };
 
     myWs.onmessage = (ev) => {
@@ -2009,10 +2013,90 @@
   }
 
   // ─── prompt / interrupt ───────────────────────────────────────
+  // ─── offline outbox (UX-BACKLOG #6) ───────────────────────────
+  // On mobile the WS dies during background / network blips. A prompt sent
+  // in that window used to vanish (sendPrompt bailed with a bare return).
+  // Now user-content messages (prompt / inject) are queued and flushed in
+  // order the moment the socket reopens, so nothing is silently dropped.
+  // In-memory only: the JS context survives a network blip (that's why the
+  // zombie-WS detection exists), so this covers the dominant case. An
+  // OS-level app kill while offline is the rarer case (see #12).
+  let outbox = [];  // [{ msg, kind:'prompt'|'inject', el, sessionId }]
+
+  function isOnline() { return !!ws && ws.readyState === 1; }
+  function hasQueuedPrompt() { return outbox.some((e) => e.kind === 'prompt'); }
+
+  function tagPending(el) {
+    if (!el) return;
+    el.classList.add('pending');
+    const who = el.querySelector('.who');
+    if (who && !who.querySelector('.pending-tag')) {
+      const tag = document.createElement('span');
+      tag.className = 'pending-tag';
+      tag.textContent = ' ⏳ 待发送';
+      who.appendChild(tag);
+    }
+  }
+  function clearPending(el) {
+    if (!el) return;
+    el.classList.remove('pending');
+    const tag = el.querySelector('.pending-tag');
+    if (tag) tag.remove();
+  }
+
+  function flushOutbox() {
+    if (!isOnline() || outbox.length === 0) return;
+    const items = outbox;
+    outbox = [];
+    let startedTurn = false;
+    const requeue = [];
+    for (const it of items) {
+      // A prompt is bound to the session it was composed for. If the user
+      // switched sessions while offline, sending it now would land in the
+      // wrong session (the WS connection's current session), so drop it
+      // with a clear notice rather than mis-send.
+      if (it.kind === 'prompt' && it.sessionId !== (currentSessionId ?? null)) {
+        clearPending(it.el);
+        if (it.el) {
+          const who = it.el.querySelector('.who');
+          if (who) {
+            const tag = document.createElement('span');
+            tag.className = 'pending-tag';
+            tag.textContent = ' ⚠ 已取消 (切换了 session)';
+            who.appendChild(tag);
+          }
+        }
+        showToast('排队的消息已取消 — session 已切换', 'warn', 3000);
+        continue;
+      }
+      try {
+        ws.send(JSON.stringify(it.msg));
+        clearPending(it.el);
+        if (it.kind === 'prompt') startedTurn = true;
+      } catch (e) {
+        requeue.push(it);
+      }
+    }
+    if (requeue.length) outbox = requeue;
+    if (startedTurn) { setBusy(true); requestNotifyOnFirstSend(); if (pendingLabel) pendingLabelApplyOnSessionInit(); }
+    const sent = items.length - requeue.length;
+    if (sent > 0) {
+      log('ok', `flushed ${sent} queued message(s) on reconnect`);
+      showToast(`已发送 ${sent} 条排队消息`, 'ok', 1800);
+    }
+  }
+
+  function clearComposer() {
+    $input.value = '';
+    pendingImages = [];
+    renderChips();
+    autoResize();
+  }
+
   function sendPrompt() {
     const text = $input.value.trim();
     if (!text && pendingImages.length === 0) return;
-    if (busy || !ws || ws.readyState !== 1) return;
+    if (busy) return;  // a turn is running — the runner rejects concurrent prompts
 
     // #14: client-side image total size cap
     const totalBytes = pendingImages.reduce((s, im) => s + Math.ceil(im.data.length * 3 / 4), 0);
@@ -2022,46 +2106,51 @@
     }
 
     const imgs = pendingImages.slice();
+    const online = isOnline();
 
     // β path: in inject mode, route to inject_to_external — server appends
     // a user-message entry to the externally-owned session's jsonl. No local
-    // turn is started; the response comes back live via the jsonl-watcher
-    // when cmax processes the queued message.
+    // turn is started; the response comes back live via the jsonl-watcher.
     if (injectMode) {
       if (!currentSessionId || !currentExternal) {
         showToast('inject 模式要求选中一个 CLI 拥有的 session', 'error', 2500);
         return;
       }
-      appendUser(text, imgs);  // render locally so user sees their input
-      sendWS({
-        type: 'inject_to_external',
-        sessionId: currentSessionId,
-        text,
-        images: imgs.length ? imgs : undefined,
-      });
-      $input.value = '';
-      pendingImages = [];
-      renderChips();
-      autoResize();
-      // Don't set busy — we didn't start a local turn. The watcher will
-      // surface the queued message + any response cmax produces.
-      showToast('已注入到 CLI queue · 桌面按 Enter 才会真的发', 'ok', 2500);
+      const el = appendUser(text, imgs);
+      const msg = { type: 'inject_to_external', sessionId: currentSessionId, text, images: imgs.length ? imgs : undefined };
+      if (online) {
+        sendWS(msg);
+        showToast('已注入到 CLI queue · 桌面按 Enter 才会真的发', 'ok', 2500);
+      } else {
+        tagPending(el);
+        outbox.push({ msg, kind: 'inject', el, sessionId: currentSessionId });
+        showToast('离线 · 已排队，重连后注入', 'warn', 2800);
+      }
+      clearComposer();
       return;
     }
 
-    appendUser(text, imgs);
-    sendWS({ type: 'prompt', text, images: imgs.length ? imgs : undefined });
-    $input.value = '';
-    pendingImages = [];
-    renderChips();
-    autoResize();
-    setBusy(true);
-
-    // First send is a good moment to ask for notification permission.
-    requestNotifyOnFirstSend();
-
-    if (pendingLabel) {
-      pendingLabelApplyOnSessionInit();
+    // Normal prompt. Only ONE prompt may be queued at a time — flushing two
+    // would make the runner reject the second as a concurrent turn.
+    if (!online && hasQueuedPrompt()) {
+      showToast('已有一条待发送的消息，等它发出再发下一条', 'warn', 2800);
+      return;
+    }
+    const el = appendUser(text, imgs);
+    const msg = { type: 'prompt', text, images: imgs.length ? imgs : undefined };
+    clearComposer();
+    if (online) {
+      sendWS(msg);
+      setBusy(true);
+      requestNotifyOnFirstSend();
+      if (pendingLabel) pendingLabelApplyOnSessionInit();
+    } else {
+      tagPending(el);
+      outbox.push({ msg, kind: 'prompt', el, sessionId: currentSessionId ?? null });
+      showToast('离线 · 已排队，重连后自动发送', 'warn', 3000);
+      // Arm the label listener now; it fires when the flushed prompt's
+      // session_init arrives.
+      if (pendingLabel) pendingLabelApplyOnSessionInit();
     }
   }
 
