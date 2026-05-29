@@ -36,3 +36,8 @@ android/app/src/main/assets/cordova_plugins.js
 # Optional: ignore lockfile if you don't want to commit it
 # package-lock.json
 static/dist/
+
+# Cloned third-party reference repos (design inspiration only, not part of agentphone).
+# The curated comparison lives in reference/REPOS.md which IS tracked.
+reference/*
+!reference/REPOS.md
