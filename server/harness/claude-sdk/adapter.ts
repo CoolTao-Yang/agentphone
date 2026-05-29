@@ -207,6 +207,15 @@ export class ClaudeSdkAdapter implements HarnessAdapter {
       // canUseTool gets the parsed input directly from SDK).
       const toolUseAccum = new Map<string, { id: string; name: string; inputJson: string }>();
       let sessionIdEmitted = false;
+      // Anthropic streaming wraps each event in its own SDK envelope with a
+      // fresh `m.uuid`, so using m.uuid as the client's messageId means every
+      // single text_delta gets a different id → client's streamState (keyed
+      // by messageId:kind) never finds a previous entry → each delta becomes
+      // its own mblock → marked sees tiny fragments → tables/code spanning
+      // deltas never render. The actual stable id is the Anthropic message
+      // id which arrives on `message_start.message.id`; we keep it across
+      // all events until `message_stop` and reset for the next message.
+      let currentMessageId: string | null = null;
 
       for await (const sdkMsg of q) {
         const m = sdkMsg as any;
@@ -219,7 +228,10 @@ export class ClaudeSdkAdapter implements HarnessAdapter {
         if (m.type === 'stream_event') {
           const ev = m.event;
           if (!ev) continue;
-          const messageId = String(m.uuid ?? 'unknown');
+          if (ev.type === 'message_start' && typeof ev.message?.id === 'string') {
+            currentMessageId = ev.message.id;
+          }
+          const messageId = currentMessageId ?? String(m.uuid ?? 'unknown');
           const blockIndex = typeof ev.index === 'number' ? ev.index : 0;
           const key = `${messageId}:${blockIndex}`;
 
@@ -251,6 +263,11 @@ export class ClaudeSdkAdapter implements HarnessAdapter {
 
           if (ev.type === 'content_block_stop') {
             yield { kind: 'assistant_block_end', messageId, blockIndex };
+            continue;
+          }
+          // Next assistant message gets a fresh stable id.
+          if (ev.type === 'message_stop') {
+            currentMessageId = null;
             continue;
           }
           continue;
