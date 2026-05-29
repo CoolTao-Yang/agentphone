@@ -17,6 +17,7 @@ import type {
   EffortLevel,
   ExternalSessionStatus,
   ImageAttachment,
+  ModelInfo,
   SessionSummary,
   SessionMessagesResponse,
 } from '../../shared/types.ts';
@@ -56,6 +57,8 @@ export type StartTurnOptions = {
   cwd: string;
   sessionId: string | null;
   effort?: EffortLevel;
+  /** Model id to drive this turn (e.g. 'claude-opus-4-8'). Undefined ⇒ default. */
+  model?: string;
   canUseTool: CanUseToolFn;
 };
 
@@ -81,6 +84,9 @@ export interface HarnessAdapter {
   getSessionMessages(sessionId: string, limit: number): Promise<SessionMessagesResponse | null>;
   ownsSession(sessionId: string): Promise<boolean>;
   recentCwds(): Promise<string[]>;
+  /** Available models + their per-model effort support, for the dynamic model
+   *  picker. Optional — adapters that can't enumerate models omit it. */
+  listModels?(): Promise<ModelInfo[]>;
 
   // ── 'owned' adapters: required ──────────────────────────────
   // Phase 1 only ships owned adapters, so both are mandatory. When Phase 2

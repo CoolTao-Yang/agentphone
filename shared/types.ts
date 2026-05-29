@@ -22,6 +22,9 @@ export type ClientMessage =
       autoApproveTools?: boolean;
       effort?: EffortLevel;
       perToolAuto?: Record<string, boolean>;
+      // Model id to drive turns with (e.g. 'claude-opus-4-8'). Empty string or
+      // null clears it → fall back to the account/SDK default model.
+      model?: string | null;
     }
   | { type: 'log'; level: 'info' | 'warn' | 'error' | 'ok'; message: string; ts?: number }
   | { type: 'pong'; ts: number }
@@ -66,6 +69,24 @@ export type ClientMessage =
 
 export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
+// Model metadata for the dynamic model picker. A subset of the SDK's ModelInfo
+// (server reads it from Query.supportedModels()). The client builds its model
+// menu from this at runtime, so new models appear without a code change — and
+// each model's supportedEffortLevels drives which effort levels the UI offers.
+export type ModelInfo = {
+  /** Model id passed to the SDK (e.g. 'claude-opus-4-8'). */
+  value: string;
+  /** Human label (e.g. 'Claude Opus 4.8'). */
+  displayName: string;
+  description?: string;
+  /** False ⇒ this model ignores effort entirely (UI hides the effort chip). */
+  supportsEffort?: boolean;
+  /** Effort levels this model honors; UI restricts the effort menu to these. */
+  supportedEffortLevels?: EffortLevel[];
+};
+
+export type ModelsResponse = { models: ModelInfo[] };
+
 // Per-session "needs attention" signal for the drawer unread marker
 // (UX-BACKLOG #9). needs_input = a tool is waiting for approval (most
 // urgent); error = the turn failed; done = the turn finished. needs_input
@@ -75,6 +96,9 @@ export type AttentionKind = 'needs_input' | 'error' | 'done';
 export type AgentSettings = {
   autoApproveTools: boolean;
   effort: EffortLevel;
+  // Model id to drive turns with (e.g. 'claude-opus-4-8'). Undefined ⇒ use the
+  // account/SDK default model. Global, like effort — shared across sessions.
+  model?: string;
   // Per-tool auto-approve rules: tool name → auto-allow. Wildcard '*' means
   // "all tools". autoApproveTools (above) is shorthand for `'*': true`.
   perToolAuto?: Record<string, boolean>;

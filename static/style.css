@@ -131,6 +131,20 @@ header {
   color: var(--muted);
 }
 .h-effort.is-max { color: var(--accent-2); border-color: var(--accent); }
+.h-model {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  width: auto;
+  padding: 0 8px;
+  min-width: 40px;
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+}
+.h-model.is-set { color: var(--accent-2); border-color: var(--accent); }
 
 /* HTTPS warning + other top-of-messages banners.
    Compact single-row layout: text ellipsizes, buttons never wrap.
@@ -1382,6 +1396,7 @@ footer {
     border-radius: 6px;
   }
   .h-effort { padding: 0 6px; font-size: 10px; min-width: 30px; }
+  .h-model { padding: 0 6px; font-size: 10px; min-width: 34px; max-width: 76px; }
   .h-acct { font-size: 10px; padding: 0 4px; }
   .h-title { font-size: 11px; gap: 6px; }
   .h-cwd { font-size: 9.5px; }

@@ -492,6 +492,10 @@ function createHandler(c: any, cfg: Cfg) {
         if (msg.effort) {
           agentSettings.effort = msg.effort;
         }
+        if (msg.model !== undefined) {
+          // Empty string / null clears it → account/SDK default model.
+          agentSettings.model = msg.model ? msg.model : undefined;
+        }
         if (msg.perToolAuto) {
           agentSettings.perToolAuto = { ...(agentSettings.perToolAuto ?? {}), ...msg.perToolAuto };
         }
@@ -576,6 +580,7 @@ function createHandler(c: any, cfg: Cfg) {
             cwd: myCurrentCwd,
             sessionId: myCurrentSessionId,
             effort: agentSettings.effort,
+            model: agentSettings.model,
             autoApproveAllTools: agentSettings.autoApproveTools,
             autoApproveTools: agentSettings.perToolAuto,
           });

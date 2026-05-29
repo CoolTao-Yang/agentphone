@@ -9,7 +9,7 @@ import { createNodeWebSocket } from '@hono/node-ws';
 import { Hono } from 'hono';
 import { mountWebSocket } from './ws.ts';
 import { mountSessionApi } from './sessions.ts';
-import { externalSessions } from './harness/registry.ts';
+import { externalSessions, getHarnessByKind } from './harness/registry.ts';
 import { pushStore } from './store/push.ts';
 import { vapidPublicKey } from './push.ts';
 import { usageSummary } from './store/usage.ts';
@@ -204,6 +204,19 @@ app.get('/api/usage', async (c) => {
     return c.json({ error: 'unauthorized' }, 401);
   }
   return c.json(await usageSummary());
+});
+
+// Available models for the dynamic model picker. Read from the claude-sdk
+// adapter's listModels() (which asks the SDK's Query.supportedModels()), so the
+// list — and each model's supported effort levels — stay current with no code
+// change. Token-gated; cached server-side after the first successful fetch.
+app.get('/api/models', async (c) => {
+  if (c.req.query('token') !== TOKEN && c.req.header('x-token') !== TOKEN) {
+    return c.json({ error: 'unauthorized' }, 401);
+  }
+  const h = getHarnessByKind('claude-sdk');
+  const models = h?.listModels ? await h.listModels() : [];
+  return c.json({ models });
 });
 
 // ── HTTPS one-click setup ─────────────────────────────────────

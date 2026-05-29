@@ -13,10 +13,12 @@ import {
   type CanUseTool as ClaudeCanUseTool,
   type PermissionResult,
   type Query,
+  type SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk';
 import type {
   AgentEvent,
   HistoryMessage,
+  ModelInfo,
   SessionMessagesResponse,
   SessionSummary,
 } from '../../../shared/types.ts';
@@ -130,10 +132,21 @@ export async function findSessionFile(sessionId: string): Promise<string | null>
   return best?.path ?? null;
 }
 
+// Degraded-mode list when the SDK can't enumerate models (offline / old CLI /
+// proxy stall). The dynamic supportedModels() path is authoritative; this just
+// keeps the picker usable. Effort levels here are best-effort approximations.
+const FALLBACK_MODELS: ModelInfo[] = [
+  { value: 'claude-opus-4-8',   displayName: 'Claude Opus 4.8',  supportsEffort: true, supportedEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'] },
+  { value: 'claude-sonnet-4-6', displayName: 'Claude Sonnet 4.6', supportsEffort: true, supportedEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'] },
+  { value: 'claude-haiku-4-5',  displayName: 'Claude Haiku 4.5',  supportsEffort: true, supportedEffortLevels: ['low', 'medium', 'high'] },
+];
+
 export class ClaudeSdkAdapter implements HarnessAdapter {
   readonly harnessKind: HarnessKind = 'claude-sdk';
   readonly agentKind: AgentKind = 'claude';
   readonly mode = 'owned' as const;
+  /** Cached result of supportedModels() — populated on first successful fetch. */
+  private modelsCache: ModelInfo[] | null = null;
   // Back-compat alias for the old `kind` field; some helpers still expect it.
   readonly kind: AgentKind = 'claude';
 
@@ -200,6 +213,7 @@ export class ClaudeSdkAdapter implements HarnessAdapter {
         cwd: opts.cwd,
         ...(resumeId ? { resume: resumeId } : {}),
         ...(opts.effort ? { effort: opts.effort } : {}),
+        ...(opts.model ? { model: opts.model } : {}),
         permissionMode: 'default',
         canUseTool: claudeCanUseTool,
         includePartialMessages: true,
@@ -477,5 +491,43 @@ export class ClaudeSdkAdapter implements HarnessAdapter {
       if (out.length >= 12) break;
     }
     return out;
+  }
+
+  // Enumerate models via the SDK's Query.supportedModels(). That method lives on
+  // a live Query, so we open a STREAMING-INPUT query whose prompt iterable never
+  // yields — the subprocess comes up in control mode and runs no turn. We ask
+  // for the model list, cache it, then end the input stream so the subprocess
+  // exits. Falls back to a static list (uncached, so a later call can retry the
+  // dynamic path) if anything stalls. Cached for the server's lifetime.
+  async listModels(): Promise<ModelInfo[]> {
+    if (this.modelsCache) return this.modelsCache;
+    let stop: () => void = () => {};
+    const stopped = new Promise<void>((r) => { stop = r; });
+    async function* noTurn(): AsyncGenerator<SDKUserMessage> {
+      await stopped;          // resolves in finally → ends the input stream
+    }
+    let q: Query | null = null;
+    try {
+      q = query({ prompt: noTurn(), options: { cwd: HOME } });
+      // Bound the wait — claude.exe startup over a corp proxy can be slow.
+      const models = await Promise.race([
+        q.supportedModels(),
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('supportedModels timeout')), 20000)),
+      ]);
+      const mapped: ModelInfo[] = (models || []).map((m: any) => ({
+        value: m.value,
+        displayName: m.displayName || m.value,
+        description: m.description,
+        supportsEffort: m.supportsEffort,
+        supportedEffortLevels: m.supportedEffortLevels,
+      }));
+      this.modelsCache = mapped.length ? mapped : FALLBACK_MODELS;
+      return this.modelsCache;
+    } catch {
+      return FALLBACK_MODELS;
+    } finally {
+      stop();
+      try { await q?.interrupt?.(); } catch { /* best effort */ }
+    }
   }
 }

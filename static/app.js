@@ -80,6 +80,9 @@
   const $effortChip = document.getElementById('effort-chip');
   const $effortMenu = document.getElementById('effort-menu');
   const $effortBd   = document.getElementById('effort-menu-bd');
+  const $modelChip  = document.getElementById('model-chip');
+  const $modelMenu  = document.getElementById('model-menu');
+  const $modelBd    = document.getElementById('model-menu-bd');
   const $debugBtn   = document.getElementById('debug-toggle');
   const $bannerRow  = document.getElementById('banner-row');
   const $searchBox  = document.getElementById('session-search');
@@ -129,24 +132,87 @@
   let lastHistoryTotal = -1;
   /** @type {Array<{ data: string, mediaType: string, name?: string }>} */
   let pendingImages = [];
-  /** @type {{ autoApproveTools: boolean, effort: string }} */
+  /** @type {{ autoApproveTools: boolean, effort: string, model?: string }} */
   let settings = { autoApproveTools: false, effort: 'max', version: 0 };
+  /** @type {Array<{value:string,displayName:string,description?:string,supportsEffort?:boolean,supportedEffortLevels?:string[]}>} */
+  let modelList = [];
+
+  function currentModelInfo() {
+    if (!settings.model) return null;
+    return modelList.find((m) => m.value === settings.model) || null;
+  }
 
   function reflectSettings() {
     $autoBtn.setAttribute('aria-pressed', String(settings.autoApproveTools));
     $autoBtn.title = settings.autoApproveTools
       ? '自动批准工具调用 (yolo) — 已开 · 点击关闭'
       : '自动批准工具调用 (yolo) — 关 · 点击开启';
-    // effort chip
+    const mi = currentModelInfo();
+    // model chip — short label (strip "Claude " prefix); 默认 = account default
+    if ($modelChip) {
+      $modelChip.textContent = settings.model
+        ? (mi ? mi.displayName.replace(/^Claude\s+/i, '') : settings.model)
+        : '默认';
+      $modelChip.classList.toggle('is-set', !!settings.model);
+    }
+    if ($modelMenu) {
+      $modelMenu.querySelectorAll('li').forEach((li) => {
+        li.classList.toggle('is-active', (li.getAttribute('data-model') || '') === (settings.model || ''));
+      });
+    }
+    // effort chip — hidden entirely for models that ignore effort. A model
+    // supports effort only if it says so explicitly (supportsEffort === true) or
+    // advertises levels; Haiku reports neither, so its chip hides. When no model
+    // is chosen (mi null = account default) we show effort (default supports it).
+    const effortSupported = !mi
+      || mi.supportsEffort === true
+      || (Array.isArray(mi.supportedEffortLevels) && mi.supportedEffortLevels.length > 0);
     if ($effortChip) {
+      $effortChip.style.display = effortSupported ? '' : 'none';
       $effortChip.textContent = settings.effort || 'max';
       $effortChip.classList.toggle('is-max', settings.effort === 'max');
     }
+    // effort menu — restrict to the selected model's supported levels (when known)
+    const allowed = mi && Array.isArray(mi.supportedEffortLevels) ? mi.supportedEffortLevels : null;
     if ($effortMenu) {
       $effortMenu.querySelectorAll('li').forEach((li) => {
-        li.classList.toggle('is-active', li.getAttribute('data-effort') === settings.effort);
+        const lvl = li.getAttribute('data-effort');
+        li.classList.toggle('is-active', lvl === settings.effort);
+        li.style.display = (allowed && !allowed.includes(lvl)) ? 'none' : '';
       });
     }
+  }
+
+  // Build the model menu from the dynamic list. "默认" (empty value) first =
+  // clear the model → account/SDK default.
+  function buildModelMenu() {
+    if (!$modelMenu) return;
+    $modelMenu.innerHTML = '';
+    const mk = (value, label, title) => {
+      const li = document.createElement('li');
+      li.setAttribute('data-model', value);
+      li.textContent = label;
+      if (title) li.title = title;
+      $modelMenu.appendChild(li);
+    };
+    mk('', '默认', '账号/SDK 默认模型');
+    for (const m of modelList) {
+      mk(m.value, (m.displayName || m.value).replace(/^Claude\s+/i, ''), m.description || m.value);
+    }
+  }
+
+  // Fetch the available models (server reads SDK supportedModels(), cached). The
+  // list + each model's supportedEffortLevels drive the dynamic menus, so new
+  // models / effort levels show up with no client change.
+  async function fetchModels() {
+    try {
+      const r = await fetch(api(`/api/models?token=${encodeURIComponent(TOKEN)}`));
+      if (!r.ok) return;
+      const data = await r.json();
+      modelList = Array.isArray(data.models) ? data.models : [];
+      buildModelMenu();
+      reflectSettings();
+    } catch { /* picker degrades to 默认-only */ }
   }
 
   // streaming text state per (messageId:blockIndex)
@@ -1404,6 +1470,7 @@
           setAccountDisplay(m.claudeAccount);
           currentSessionId = m.currentSessionId;
           if (m.settings) { settings = m.settings; reflectSettings(); }
+          fetchModels();  // populate the dynamic model picker (cached server-side)
           log('ok',
             `connected · account=${m.claudeAccount} · cwd=${m.currentCwd} · ` +
             `auto=${settings.autoApproveTools} · effort=${settings.effort} · ` +
@@ -2675,6 +2742,8 @@
   let notifyOnDone = false;
   function openEffortMenu() { if ($effortMenu) { $effortMenu.classList.add('open'); $effortBd && $effortBd.classList.add('open'); } }
   function closeEffortMenu() { if ($effortMenu) { $effortMenu.classList.remove('open'); $effortBd && $effortBd.classList.remove('open'); } }
+  function openModelMenu() { if ($modelMenu) { $modelMenu.classList.add('open'); $modelBd && $modelBd.classList.add('open'); } }
+  function closeModelMenu() { if ($modelMenu) { $modelMenu.classList.remove('open'); $modelBd && $modelBd.classList.remove('open'); } }
   function addBanner(kind, html) {
     if (!$bannerRow) return;
     const b = document.createElement('div');
@@ -2882,6 +2951,27 @@
     });
   }
   if ($effortBd) $effortBd.addEventListener('click', closeEffortMenu);
+  if ($modelChip) {
+    $modelChip.addEventListener('click', () => {
+      ($modelMenu && $modelMenu.classList.contains('open')) ? closeModelMenu() : openModelMenu();
+    });
+  }
+  if ($modelMenu) {
+    $modelMenu.addEventListener('click', (e) => {
+      const t = e.target;
+      if (!(t instanceof HTMLElement)) return;
+      const li = t.closest('li');
+      if (!li) return;
+      const val = li.getAttribute('data-model') || '';
+      sendWS({ type: 'set_settings', model: val || null, expectedVersion: settings.version });
+      settings.model = val || undefined;
+      reflectSettings();
+      closeModelMenu();
+      track('model_switch', { model: val || 'default' });
+      showToast('模型 → ' + (val ? li.textContent : '默认'), 'ok', 1800);
+    });
+  }
+  if ($modelBd) $modelBd.addEventListener('click', closeModelMenu);
   if ($searchBox) $searchBox.addEventListener('input', applySessionFilter);
   if (navigator.connection && typeof navigator.connection.addEventListener === 'function') {
     navigator.connection.addEventListener('change', () => {

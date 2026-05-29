@@ -155,6 +155,8 @@ export class TurnRunner {
     cwd: string;
     sessionId: string | null;
     effort?: EffortLevel;
+    /** Model id to drive this turn (e.g. 'claude-opus-4-8'). Undefined ⇒ default. */
+    model?: string;
     autoApproveAllTools?: boolean;
     /** Per-tool auto-approve list — names that bypass approval. */
     autoApproveTools?: Record<string, boolean>;
@@ -238,6 +240,7 @@ export class TurnRunner {
       cwd: opts.cwd,
       sessionId: opts.sessionId,
       effort: opts.effort,
+      model: opts.model,
       canUseTool,
     });
 
