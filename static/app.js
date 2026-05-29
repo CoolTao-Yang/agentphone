@@ -544,7 +544,20 @@
 
   function onAssistantBlockStart(evt) {
     if (evt.blockType !== 'text' && evt.blockType !== 'thinking') return;
-    const key = `${evt.messageId}:${evt.blockIndex}`;
+    // Per-(message, kind) merging — NOT per block. Claude often splits a
+    // single response across several content blocks of the same kind (e.g.
+    // text → tool_use → text). Each block then gets its own mblock and a
+    // separate marked() parse, so a markdown table or fenced code span
+    // straddling two text blocks can't be recognized in either piece —
+    // tables render as raw "| a | b |" rows, code fences as inline ticks,
+    // etc. Refreshing rebuilt the assistant message from the history API
+    // (which serves one concatenated text) and everything came out clean —
+    // that's the screenshot diff the user flagged.
+    //
+    // Fix: same key for every text block of the same message, same for
+    // thinking. Multiple deltas accumulate in one rawText; one marked()
+    // call sees the full content and parses it correctly.
+    const key = `${evt.messageId}:${evt.blockType}`;
     if (streamState.has(key)) return;
     const container = ensureAssistantContainer(evt.blockType);
     const el = newAssistantBlockEl(container);
@@ -582,7 +595,7 @@
   }
 
   function onTextDelta(evt) {
-    const key = `${evt.messageId}:${evt.blockIndex}`;
+    const key = `${evt.messageId}:text`;
     let s = streamState.get(key);
     if (!s) {
       const container = ensureAssistantContainer('text');
@@ -595,7 +608,7 @@
   }
 
   function onThinkingDelta(evt) {
-    const key = `${evt.messageId}:${evt.blockIndex}`;
+    const key = `${evt.messageId}:thinking`;
     let s = streamState.get(key);
     if (!s) {
       const container = ensureAssistantContainer('thinking');
@@ -608,18 +621,29 @@
   }
 
   function onAssistantBlockEnd(evt) {
-    const key = `${evt.messageId}:${evt.blockIndex}`;
-    const s = streamState.get(key);
-    if (!s) return;
-    if (s.kind === 'text') {
-      s.el.innerHTML = renderMarkdown(s.rawText);
-      highlightInside(s.el);
-      if (ttsOn) speak(stripForTTS(s.rawText));
-    } else {
-      s.el.textContent = s.rawText;
+    // Multiple text/thinking blocks of one message all map to the same
+    // streamState entry (messageId:text / messageId:thinking). We still get
+    // one block_end per content block, but the render is correct after
+    // ANY of them (marked sees the latest accumulated rawText). The hljs
+    // call here ensures the final state is fully styled.
+    const tKey = `${evt.messageId}:text`;
+    const sText = streamState.get(tKey);
+    if (sText) {
+      sText.el.innerHTML = renderMarkdown(sText.rawText);
+      highlightInside(sText.el);
+      if (ttsOn) speak(stripForTTS(sText.rawText));
+    }
+    const kKey = `${evt.messageId}:thinking`;
+    const sThink = streamState.get(kKey);
+    if (sThink) {
+      sThink.el.textContent = sThink.rawText;
     }
     autoScroll();
-    streamState.delete(key);
+    // We do NOT delete streamState entries here — the merging design keeps
+    // them alive across blocks of the same message so subsequent text
+    // blocks of the same message accumulate into the same mblock. The
+    // entries become unreferenced naturally when the next user prompt
+    // starts a new message and clearMessages → streamState.clear() runs.
   }
 
   // ─── user message ─────────────────────────────────────────────
