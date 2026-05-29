@@ -37,7 +37,9 @@ android/app/src/main/assets/cordova_plugins.js
 # package-lock.json
 static/dist/
 
-# Cloned third-party reference repos (design inspiration only, not part of agentphone).
-# The curated comparison lives in reference/REPOS.md which IS tracked.
-reference/*
-!reference/REPOS.md
+# Cloned third-party reference repos (design inspiration only, not part of
+# agentphone). The curated comparison lives in dev/REPOS.md (also gitignored).
+reference/
+
+# Internal dev docs + scratch (not part of the shipped product — STATE/DESIGN/UX-BACKLOG/COMPAT/FEISHU live here)
+dev/
