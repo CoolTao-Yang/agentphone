@@ -67,7 +67,12 @@ export type ClientMessage =
   // purpose.
   | { type: 'fork_session'; externalSessionId: string; cwd?: string };
 
-export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+// 'ultracode' (= xhigh + dynamic workflow orchestration) is offered by newer
+// Claude Code builds beyond 'max'. The installed SDK's own type and the CLI's
+// supportedEffortLevels still list only the first five, but the CLI ACCEPTS
+// 'ultracode' at runtime (verified: a turn with effort:'ultracode' succeeds),
+// so we surface it. The adapter casts past the SDK's narrower type.
+export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultracode';
 
 // Model metadata for the dynamic model picker. A subset of the SDK's ModelInfo
 // (server reads it from Query.supportedModels()). The client builds its model

@@ -212,7 +212,9 @@ export class ClaudeSdkAdapter implements HarnessAdapter {
       options: {
         cwd: opts.cwd,
         ...(resumeId ? { resume: resumeId } : {}),
-        ...(opts.effort ? { effort: opts.effort } : {}),
+        // Cast: our EffortLevel includes 'ultracode', which the CLI accepts at
+        // runtime but the SDK's narrower effort type doesn't list yet.
+        ...(opts.effort ? { effort: opts.effort as unknown as 'max' } : {}),
         ...(opts.model ? { model: opts.model } : {}),
         permissionMode: 'default',
         canUseTool: claudeCanUseTool,

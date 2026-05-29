@@ -188,13 +188,16 @@
     if ($modelCustomInput) $modelCustomInput.value = (settings.model && !mi) ? settings.model : '';
     // effort section — hidden entirely for models that ignore effort
     if ($effortSection) $effortSection.classList.toggle('hidden', !effortSupported);
-    // effort segmented — active + restrict to the model's supported levels
+    // effort segmented — active + restrict to the model's supported levels.
+    // 'ultracode' is never in the advertised supportedEffortLevels (the catalog
+    // lags), but the CLI accepts it, so we always keep it visible when the
+    // effort section is shown rather than letting the allowed-list hide it.
     const allowed = mi && Array.isArray(mi.supportedEffortLevels) ? mi.supportedEffortLevels : null;
     if ($effortSeg) {
       $effortSeg.querySelectorAll('button').forEach((b) => {
         const lvl = b.getAttribute('data-effort');
         b.classList.toggle('is-active', lvl === settings.effort);
-        b.hidden = !!(allowed && !allowed.includes(lvl));
+        b.hidden = (lvl === 'ultracode') ? false : !!(allowed && !allowed.includes(lvl));
       });
     }
   }
