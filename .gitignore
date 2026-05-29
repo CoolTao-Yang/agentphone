@@ -43,3 +43,6 @@ reference/
 
 # Internal dev docs + scratch (not part of the shipped product — STATE/DESIGN/UX-BACKLOG/COMPAT/FEISHU live here)
 dev/
+
+# Local-env UI self-test harness (machine-specific paths; not shipped)
+.claude/skills/uitest/

@@ -429,6 +429,7 @@
           phoneSessionId: currentSessionId,
           externalSessionId: currentLinkExternalSid,
         });
+        track('merge');
         showToast('合并请求已发送 · 见桌面 CLI', 'ok', 2200);
       });
     }
@@ -469,6 +470,7 @@
         // conversation".
         if (!currentSessionId) return;
         sendWS({ type: 'fork_session', externalSessionId: currentSessionId, cwd: currentCwd });
+        track('fork');
         clearMessages();
         // Local optimistic state: server will echo session_set { sessionId:
         // null } back; applyFollowMode will hide the external banner.
@@ -1063,6 +1065,7 @@
       function doDeny() {
         const reason = denyInput.value.trim();
         sendWS({ type: 'tool_response', toolUseId, decision: 'deny', reason: reason || undefined });
+        track('tool_deny', { tool: toolName, hasReason: reason.length > 0 });
         markToolResolved(toolUseId, 'deny');
       }
       denyConfirm.addEventListener('click', doDeny);
@@ -1076,6 +1079,7 @@
           sendWS({ type: 'set_settings', perToolAuto: update, expectedVersion: settings.version });
         }
         sendWS({ type: 'tool_response', toolUseId, decision: 'allow', allowRestOfTurn: cb.checked });
+        track('tool_approve', { tool: toolName, restOfTurn: cb.checked, forever: cbForever.checked });
         markToolResolved(toolUseId, 'allow');
       });
       denyBtn.addEventListener('click', () => {
@@ -1279,6 +1283,44 @@
     return true;
   }
 
+  // ─── local usage telemetry (UX research, content-free) ────────
+  // Mobile vs desktop habits differ; we log coarse event names + a
+  // shell/form tag so the server can aggregate (server/store/usage.ts).
+  // NEVER includes prompt/reply text — only counts/booleans/enums.
+  const USAGE_SHELL = inCapacitor() ? 'apk' : 'pwa';
+  function usageForm() {
+    // Coarse form factor: touch + narrow viewport ⇒ mobile.
+    const touch = (navigator.maxTouchPoints || 0) > 0 || /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
+    const narrow = Math.min(window.innerWidth, window.innerHeight) <= 600;
+    return (touch && narrow) ? 'mobile' : (touch ? 'tablet' : 'desktop');
+  }
+  // Automated UI tests (.claude/skills/uitest) load the real client; without an
+  // opt-out every test run would inject synthetic, emulated-form app_open events
+  // into the user's local research log and skew the mobile-vs-desktop counts.
+  // `?notrack=1` (or localStorage flag) makes track() a no-op for those runs.
+  let trackingDisabled = false;
+  try {
+    trackingDisabled = new URL(location.href).searchParams.has('notrack')
+      || localStorage.getItem('agentphone:notrack') === '1';
+  } catch { /* ignore */ }
+  function track(name, props) {
+    if (trackingDisabled) return;
+    try {
+      sendWS({ type: 'usage', name, shell: USAGE_SHELL, form: usageForm(), props: props || undefined });
+    } catch { /* telemetry must never break the app */ }
+  }
+  // True when launched as an installed PWA (standalone display mode) rather
+  // than a browser tab — a coarse engagement signal for the app_open event.
+  function isStandalone() {
+    try {
+      return window.matchMedia('(display-mode: standalone)').matches
+        || window.navigator.standalone === true
+        || inCapacitor();
+    } catch { return inCapacitor(); }
+  }
+  // Guard so app_open fires once per page load, not on every WS reconnect.
+  let appOpenTracked = false;
+
   // Track when we last heard *anything* from the server. Heartbeat ping
   // counts as activity. If we go 65s with no message at all, the WS is
   // effectively dead even if it shows readyState=OPEN — force reconnect.
@@ -1366,6 +1408,8 @@
             `connected · account=${m.claudeAccount} · cwd=${m.currentCwd} · ` +
             `auto=${settings.autoApproveTools} · effort=${settings.effort} · ` +
             `turn=${m.activeTurn ? (m.activeTurn.done ? 'done' : 'running') : 'none'}`);
+          // Once per page load (not per reconnect) — first real session open.
+          if (!appOpenTracked) { appOpenTracked = true; track('app_open', { standalone: isStandalone() }); }
           if (m.activeTurn && m.activeTurn.events && m.activeTurn.events.length) {
             const sameTurn = lastTurnId === m.activeTurn.turnId;
             if (!sameTurn) {
@@ -1792,6 +1836,7 @@
       return;
     }
     sendWS({ type: 'select_session', sessionId, cwd });
+    track('session_switch');
     clearMessages();
     currentSessionId = sessionId;
     setCwdDisplay(cwd);
@@ -2195,6 +2240,7 @@
       }
       const el = appendUser(text, imgs);
       const msg = { type: 'inject_to_external', sessionId: currentSessionId, text, images: imgs.length ? imgs : undefined };
+      track('inject', { chars: text.length, hasImages: imgs.length > 0, online });
       if (online) {
         sendWS(msg);
         showToast('已注入到 CLI queue · 桌面按 Enter 才会真的发', 'ok', 2500);
@@ -2215,6 +2261,7 @@
     }
     const el = appendUser(text, imgs);
     const msg = { type: 'prompt', text, images: imgs.length ? imgs : undefined };
+    track('prompt_sent', { chars: text.length, hasImages: imgs.length > 0, online });
     clearComposer();
     if (online) {
       sendWS(msg);
@@ -2499,6 +2546,7 @@
   function startSTT() {
     if (!stt) { showToast('此设备不支持语音识别', 'error'); return; }
     if (recogActive) { Promise.resolve(stt.stop()).catch(() => {}); return; }
+    track('voice_input', { kind: stt.kind });
     try {
       const p = stt.start();
       if (p && typeof p.then === 'function') {

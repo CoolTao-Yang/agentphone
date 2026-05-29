@@ -31,6 +31,10 @@ export type ClientMessage =
   | { type: 'takeover'; sessionId: string }
   // Clear a session's unread/attention marker — sent when the user views it.
   | { type: 'mark_seen'; sessionId: string }
+  // Local usage telemetry (UX research). Content-free: name + coarse props
+  // + the client's shell/form so we can compare mobile vs desktop habits.
+  // Stored locally only (server/store/usage.ts), never sent anywhere.
+  | { type: 'usage'; name: string; shell?: string; form?: string; props?: Record<string, unknown> }
   // β path: phone writes the text as a user message into an externally-owned
   // session's jsonl. cmax sees it as a queued user prompt — desktop user
   // presses Enter to actually trigger the response (or cmax auto-fires if

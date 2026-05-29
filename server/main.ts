@@ -12,6 +12,7 @@ import { mountSessionApi } from './sessions.ts';
 import { externalSessions } from './harness/registry.ts';
 import { pushStore } from './store/push.ts';
 import { vapidPublicKey } from './push.ts';
+import { usageSummary } from './store/usage.ts';
 import { getLatestApk, getCachedApkInfo, hasGhToken } from './apk-download.ts';
 import { EnvHttpProxyAgent, setGlobalDispatcher } from 'undici';
 import QRCode from 'qrcode';
@@ -194,6 +195,15 @@ app.get('/api/accounts', (c) => {
     out.push({ name: '(default)', path: join(homedir(), '.claude'), active: true });
   }
   return c.json({ accounts: out, activePath: CLAUDE_CONFIG_DIR || null });
+});
+
+// Local usage telemetry summary (UX research). Token-gated; data is local
+// only (~/.config/agentphone/usage.jsonl) and never leaves this machine.
+app.get('/api/usage', async (c) => {
+  if (c.req.query('token') !== TOKEN && c.req.header('x-token') !== TOKEN) {
+    return c.json({ error: 'unauthorized' }, 401);
+  }
+  return c.json(await usageSummary());
 });
 
 // ── HTTPS one-click setup ─────────────────────────────────────

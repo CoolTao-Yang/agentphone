@@ -24,6 +24,7 @@ import { appendInjectUserMessage, appendMirrorEntry, mergeFromPhoneSession, buil
 import { findSessionFile } from './harness/claude-sdk/adapter.ts';
 import { linkStore } from './store/links.ts';
 import { attentionStore } from './store/attention.ts';
+import { recordUsage } from './store/usage.ts';
 
 function externalStatusFor(sessionId: string | null): ExternalSessionStatus | null {
   if (!sessionId) return null;
@@ -430,6 +431,18 @@ function createHandler(c: any, cfg: Cfg) {
         // Client viewed a session → clear its unread marker. attentionStore
         // broadcasts the cleared state to every client so all drawers sync.
         attentionStore.clear(msg.sessionId);
+        return;
+      }
+
+      if (msg.type === 'usage') {
+        // Local-only UX telemetry. Content-free; never leaves this machine.
+        recordUsage({
+          ts: Date.now(),
+          name: String(msg.name || '').slice(0, 60),
+          shell: msg.shell,
+          form: msg.form,
+          props: msg.props,
+        });
         return;
       }
 
