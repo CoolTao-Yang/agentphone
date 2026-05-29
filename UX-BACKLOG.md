@@ -8,8 +8,15 @@
 > **✅ SHIPPED 2026-05-29** (the "DO 5 FIRST" set): #1 needs-input push · #2 error/rate-limit push ·
 > #3 vendored CDN libs locally (static/vendor/, SW v42) · #4 pairing validation · #5 deny-with-reason.
 > All push notifications now fire from the TurnRunner (server/runner.ts) — once each, even with zero
-> sockets attached. Next unstarted high-value: #6 offline outbox · #7 per-tool diff rendering ·
-> #8 rate-limit countdown · #9 drawer unread markers.
+> sockets attached.
+>
+> **✅ SHIPPED 2026-05-29 (round 2):** #7 per-tool rich rendering — Edit/MultiEdit show a real LCS
+> line-diff (context grey, del red, add green), Write shows a highlighted code block, Bash shows the
+> command + description, Read/Grep/Glob a compact path line; everything else falls back to JSON.
+> Tool results cap at 16 lines with inline expand. Replaces the raw-JSON `<pre>` dump.
+>
+> Next unstarted high-value: #6 offline outbox · #8 rate-limit countdown · #9 drawer unread markers ·
+> #11 paste-image · #21 slash-command autocomplete.
 
 # agentphone UX Optimization Backlog
 

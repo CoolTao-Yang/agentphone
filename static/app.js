@@ -798,6 +798,185 @@
     try { return JSON.stringify(input).slice(0, 100); } catch { return ''; }
   }
 
+  // ─── per-tool rich rendering (UX-BACKLOG #7) ──────────────────
+  // Instead of dumping JSON.stringify(input) for every tool, render the
+  // shape that's actually readable on a phone: a real line-diff for
+  // Edit/MultiEdit, a code block for Write, mono command for Bash, a compact
+  // path/pattern line for Read/Grep/Glob. Falls back to JSON for unknowns.
+
+  function langFromPath(p) {
+    const ext = String(p || '').split('.').pop().toLowerCase();
+    const map = {
+      ts: 'typescript', tsx: 'typescript', js: 'javascript', jsx: 'javascript',
+      mjs: 'javascript', cjs: 'javascript', py: 'python', rs: 'rust', go: 'go',
+      java: 'java', c: 'c', h: 'c', cpp: 'cpp', cc: 'cpp', cs: 'csharp',
+      css: 'css', scss: 'scss', html: 'xml', xml: 'xml', json: 'json',
+      md: 'markdown', sh: 'bash', bash: 'bash', zsh: 'bash', yml: 'yaml',
+      yaml: 'yaml', sql: 'sql', swift: 'swift', kt: 'kotlin', rb: 'ruby',
+      php: 'php', toml: 'ini', ini: 'ini',
+    };
+    return map[ext] || '';
+  }
+
+  // LCS-based line diff → [{type:'ctx'|'del'|'add', text}]. Unchanged lines
+  // become context so the diff reads naturally; only changed lines colour.
+  function lineDiff(oldStr, newStr) {
+    const a = String(oldStr ?? '').split('\n');
+    const b = String(newStr ?? '').split('\n');
+    const n = a.length, m = b.length;
+    // Guard pathological sizes — fall back to all-del + all-add.
+    if (n * m > 400000) {
+      return [
+        ...a.map((t) => ({ type: 'del', text: t })),
+        ...b.map((t) => ({ type: 'add', text: t })),
+      ];
+    }
+    const dp = Array.from({ length: n + 1 }, () => new Int32Array(m + 1));
+    for (let i = n - 1; i >= 0; i--) {
+      for (let j = m - 1; j >= 0; j--) {
+        dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+      }
+    }
+    const out = [];
+    let i = 0, j = 0;
+    while (i < n && j < m) {
+      if (a[i] === b[j]) { out.push({ type: 'ctx', text: a[i] }); i++; j++; }
+      else if (dp[i + 1][j] >= dp[i][j + 1]) { out.push({ type: 'del', text: a[i] }); i++; }
+      else { out.push({ type: 'add', text: b[j] }); j++; }
+    }
+    while (i < n) out.push({ type: 'del', text: a[i++] });
+    while (j < m) out.push({ type: 'add', text: b[j++] });
+    return out;
+  }
+
+  const DIFF_COLLAPSE = 16;
+  function buildDiffEl(oldStr, newStr) {
+    const diff = lineDiff(oldStr, newStr);
+    const wrap = document.createElement('div');
+    wrap.className = 'tool-diff';
+    const makeLine = (d) => {
+      const ln = document.createElement('div');
+      ln.className = 'diff-line ' + d.type;
+      const sign = d.type === 'del' ? '-' : d.type === 'add' ? '+' : ' ';
+      ln.textContent = sign + ' ' + d.text;
+      return ln;
+    };
+    const shown = diff.length <= DIFF_COLLAPSE ? diff : diff.slice(0, DIFF_COLLAPSE);
+    shown.forEach((d) => wrap.appendChild(makeLine(d)));
+    if (diff.length > DIFF_COLLAPSE) {
+      const rest = diff.slice(DIFF_COLLAPSE);
+      const more = document.createElement('button');
+      more.className = 'diff-more';
+      more.type = 'button';
+      more.textContent = `▾ 展开剩余 ${rest.length} 行`;
+      more.addEventListener('click', () => {
+        more.remove();
+        rest.forEach((d) => wrap.appendChild(makeLine(d)));
+      });
+      wrap.appendChild(more);
+    }
+    return wrap;
+  }
+
+  function buildCodeEl(code, lang) {
+    const pre = document.createElement('pre');
+    pre.className = 'tool-code';
+    const codeEl = document.createElement('code');
+    if (lang) codeEl.className = 'language-' + lang;
+    codeEl.textContent = String(code ?? '');
+    pre.appendChild(codeEl);
+    try { if (window.hljs && lang) window.hljs.highlightElement(codeEl); } catch {}
+    return pre;
+  }
+
+  function fileHeaderEl(path, icon) {
+    const h = document.createElement('div');
+    h.className = 'tool-file';
+    h.textContent = (icon ? icon + ' ' : '') + String(path);
+    return h;
+  }
+
+  // Returns a DOM node for the tool-body, dispatched on tool name.
+  function renderToolInputBody(toolName, input) {
+    const t = String(toolName || '');
+    const obj = (input && typeof input === 'object') ? input : {};
+    const frag = document.createElement('div');
+    frag.className = 'tool-render';
+
+    // Edit / MultiEdit → line diff
+    if (/edit/i.test(t) && (obj.old_string !== undefined || Array.isArray(obj.edits))) {
+      if (obj.file_path) frag.appendChild(fileHeaderEl(obj.file_path, '✏️'));
+      if (Array.isArray(obj.edits)) {
+        obj.edits.forEach((e, idx) => {
+          frag.appendChild(buildDiffEl(e && e.old_string || '', e && e.new_string || ''));
+          if (idx < obj.edits.length - 1) {
+            const sep = document.createElement('div'); sep.className = 'diff-sep'; frag.appendChild(sep);
+          }
+        });
+      } else {
+        frag.appendChild(buildDiffEl(obj.old_string || '', obj.new_string || ''));
+      }
+      return frag;
+    }
+    // Write → file + content code block
+    if (/^write$/i.test(t) && typeof obj.content === 'string') {
+      if (obj.file_path) frag.appendChild(fileHeaderEl(obj.file_path, '📝'));
+      frag.appendChild(buildCodeEl(obj.content, langFromPath(obj.file_path)));
+      return frag;
+    }
+    // Bash → command + description
+    if (/^bash$/i.test(t) && typeof obj.command === 'string') {
+      frag.appendChild(buildCodeEl(obj.command, 'bash'));
+      if (obj.description) {
+        const d = document.createElement('div'); d.className = 'tool-desc'; d.textContent = obj.description;
+        frag.appendChild(d);
+      }
+      return frag;
+    }
+    // Read / Grep / Glob / LS → compact path/pattern line
+    if (/^(read|grep|glob|ls|notebookread)$/i.test(t)) {
+      const bits = [];
+      if (obj.pattern) bits.push('🔎 ' + obj.pattern);
+      if (obj.glob) bits.push('glob ' + obj.glob);
+      if (obj.file_path) bits.push('📄 ' + obj.file_path);
+      if (obj.path) bits.push('📁 ' + obj.path);
+      if (obj.output_mode) bits.push('(' + obj.output_mode + ')');
+      if (bits.length) { frag.appendChild(fileHeaderEl(bits.join('   '), '')); return frag; }
+    }
+    // Fallback → JSON
+    const pre = document.createElement('pre');
+    pre.className = 'tool-code';
+    try { pre.textContent = JSON.stringify(input, null, 2); } catch { pre.textContent = String(input); }
+    frag.appendChild(pre);
+    return frag;
+  }
+
+  // Tool RESULT body: cap long output at N lines + inline expand (avoids a
+  // nested scroll box fighting the page scroll on mobile).
+  const RESULT_CAP = 16;
+  function buildResultEl(content, isError) {
+    const text = String(content ?? '');
+    const lines = text.split('\n');
+    if (lines.length <= RESULT_CAP) {
+      const r = document.createElement('div');
+      r.className = 't-result' + (isError ? ' err' : '');
+      r.textContent = text;
+      return r;
+    }
+    const wrap = document.createElement('div');
+    const r = document.createElement('div');
+    r.className = 't-result' + (isError ? ' err' : '');
+    r.textContent = lines.slice(0, RESULT_CAP).join('\n');
+    const more = document.createElement('button');
+    more.className = 'diff-more';
+    more.type = 'button';
+    more.textContent = `▾ 展开剩余 ${lines.length - RESULT_CAP} 行`;
+    more.addEventListener('click', () => { r.textContent = text; more.remove(); });
+    wrap.appendChild(r);
+    wrap.appendChild(more);
+    return wrap;
+  }
+
   function appendToolRequest(toolUseId, toolName, input, autoApproved) {
     clearEmpty();
     const msg = document.createElement('div');
@@ -823,13 +1002,7 @@
 
     const tBody = document.createElement('div');
     tBody.className = 'tool-body';
-    const pre = document.createElement('pre');
-    try {
-      pre.textContent = JSON.stringify(input, null, 2);
-    } catch {
-      pre.textContent = String(input);
-    }
-    tBody.appendChild(pre);
+    tBody.appendChild(renderToolInputBody(toolName, input));
 
     card.appendChild(header);
     card.appendChild(tBody);
@@ -920,7 +1093,7 @@
     $messages.appendChild(msg);
     autoScroll();
 
-    toolCards.set(toolUseId, { card, resolved: !!autoApproved });
+    toolCards.set(toolUseId, { card, resolved: !!autoApproved, toolName });
   }
 
   function markToolResolved(toolUseId, decision) {
@@ -950,9 +1123,7 @@
       const who = document.createElement('div'); who.className = 'who';
       who.textContent = '工具结果';
       const body = document.createElement('div'); body.className = 'body';
-      const pre = document.createElement('pre');
-      pre.textContent = content;
-      body.appendChild(pre);
+      body.appendChild(buildResultEl(content, isError));
       msg.appendChild(who); msg.appendChild(body);
       $messages.appendChild(msg);
       autoScroll();
@@ -964,10 +1135,7 @@
     if (isError) { card.classList.add('error'); if (status) { status.textContent = '错误'; status.classList.remove('go'); status.classList.add('bad'); } }
     else { if (status) { status.textContent = '完成'; status.classList.remove('go'); status.classList.add('ok'); } }
     const tBody = card.querySelector('.tool-body');
-    const r = document.createElement('div');
-    r.className = 't-result' + (isError ? ' err' : '');
-    r.textContent = content;
-    tBody.appendChild(r);
+    tBody.appendChild(buildResultEl(content, isError));
     autoScroll();
   }
 
