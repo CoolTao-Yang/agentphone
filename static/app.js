@@ -121,6 +121,28 @@
     return String(s).replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
   }
 
+  // Streaming-safe wrapper: splits the in-progress text at the LAST
+  // paragraph break (\n\n). Everything before is "stable" — by definition
+  // no partial table / open code fence / unclosed bold can survive a
+  // paragraph boundary — so we send it through marked normally. Everything
+  // after is the in-progress tail rendered as escaped plaintext so
+  // half-formed pipe rows / open ``` / unclosed inline `code` don't get
+  // mangled into ugly HTML during streaming. block_end calls renderMarkdown
+  // directly on the full content for the final clean render.
+  function renderMarkdownStream(text) {
+    const lastBreak = text.lastIndexOf('\n\n');
+    if (lastBreak < 0) {
+      return `<div class="stream-tail">${escapeHtml(text)}</div>`;
+    }
+    const safe = text.slice(0, lastBreak);
+    const tail = text.slice(lastBreak + 2);
+    const safeHtml = renderMarkdown(safe);
+    const tailHtml = tail.trim()
+      ? `\n<div class="stream-tail">${escapeHtml(tail)}</div>`
+      : '';
+    return safeHtml + tailHtml;
+  }
+
   function renderMarkdown(text) {
     if (!window.marked) return `<pre>${escapeHtml(text)}</pre>`;
     try {
@@ -584,10 +606,11 @@
       if (state.kind === 'thinking') {
         state.el.textContent = state.rawText;
       } else {
-        state.el.innerHTML = renderMarkdown(state.rawText);
-        // Highlight during stream so code blocks aren't bare grey until
-        // assistant_block_end fires. hljs idempotent-skips elements that
-        // already have .hljs class so re-running on every tick is cheap.
+        // Streaming-safe render — incomplete trailing block stays as
+        // plaintext so we don't get the "raw |column| rows" / "open ```"
+        // visual glitches between deltas. block_end runs the full
+        // renderMarkdown on the same rawText so the final state is clean.
+        state.el.innerHTML = renderMarkdownStream(state.rawText);
         highlightInside(state.el);
       }
       autoScroll();

@@ -1133,3 +1133,19 @@ footer {
 @media (hover: none) {
   .msg.assistant .msg-copy { opacity: 0.5; border-color: var(--border); }
 }
+
+/* Streaming-safe tail (the in-progress part that hasn't hit \n\n yet).
+   We render it as plaintext to avoid showing partial markdown syntax —
+   half-typed tables, open code fences — as mangled HTML. After the
+   final block_end the whole thing is re-rendered through marked. */
+.stream-tail {
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow-wrap: anywhere;
+  font-family: var(--sans);
+  color: var(--text);
+  margin: 0;
+  /* Subtle marker that this is "live being typed" content. Optional;
+     remove if it feels noisy. */
+  opacity: 0.95;
+}
