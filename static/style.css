@@ -1104,3 +1104,32 @@ footer {
 }
 .banner.follow-mode .follow-takeover:active,
 .banner.follow-mode .follow-newsession:active { transform: scale(0.96); }
+
+/* Whole-message copy button (UX.3) */
+.msg.assistant { position: relative; }
+.msg.assistant .msg-copy {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--muted);
+  width: 26px;
+  height: 26px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s, border-color 0.15s;
+  display: inline-flex; align-items: center; justify-content: center;
+  -webkit-tap-highlight-color: transparent;
+}
+.msg.assistant:hover .msg-copy,
+.msg.assistant .msg-copy:focus-visible { opacity: 0.6; border-color: var(--border); }
+.msg.assistant .msg-copy:hover { opacity: 1; background: var(--surface-2); }
+.msg.assistant .msg-copy:active { transform: scale(0.92); }
+.msg.assistant .msg-copy.copied { color: var(--ok); opacity: 1; }
+/* On touch devices keep it always visible (hover doesn't work) */
+@media (hover: none) {
+  .msg.assistant .msg-copy { opacity: 0.5; border-color: var(--border); }
+}

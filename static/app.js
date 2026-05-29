@@ -124,7 +124,11 @@
   function renderMarkdown(text) {
     if (!window.marked) return `<pre>${escapeHtml(text)}</pre>`;
     try {
-      let html = window.marked.parse(text, { gfm: true, breaks: false, async: false });
+      // breaks:true → single newline becomes <br>. Chat content is much more
+      // readable that way; the strict-markdown default of "single \n = space"
+      // makes the assistant's paragraphs run together. CLI cmax effectively
+      // does the same by streaming char-by-char.
+      let html = window.marked.parse(text, { gfm: true, breaks: true, async: false });
       html = html.replace(/<table>/g, '<div class="table-wrap"><table>')
                  .replace(/<\/table>/g, '</table></div>');
       // #2 Inject a copy button into every <pre> so phone users don't have
@@ -136,6 +140,28 @@
       return `<pre>${escapeHtml(text)}</pre>`;
     }
   }
+
+  // Delegated copy: whole assistant message via the 📋 in the msg header.
+  document.addEventListener('click', (e) => {
+    const t = e.target;
+    if (!(t instanceof HTMLElement) || !t.classList.contains('msg-copy')) return;
+    const msg = t.closest('.msg');
+    if (!msg) return;
+    const body = msg.querySelector('.body');
+    if (!body) return;
+    const text = body.innerText || body.textContent || '';
+    const flash = () => {
+      t.classList.add('copied');
+      t.textContent = '✓';
+      setTimeout(() => { t.classList.remove('copied'); t.textContent = '📋'; }, 1200);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(flash).catch(() => {
+        showToast('复制失败 — 浏览器不支持？', 'error', 2500);
+      });
+    }
+    e.stopPropagation();
+  });
 
   // Delegated click handler for copy buttons (works for both live + replay).
   document.addEventListener('click', (e) => {
@@ -425,10 +451,29 @@
     }, 91_000);
   }
 
+  // Auto-scroll respects the user: if they've actively scrolled up to read,
+  // we don't yank them back to the bottom mid-stream. Two-tier check:
+  //   * "near bottom" threshold bumped from 80 → 200px so a small scroll-up
+  //     while reading doesn't get clobbered
+  //   * an explicit userScrolledAway flag set by the messages-area scroll
+  //     listener — once the user puts >200px between themselves and the
+  //     bottom, we stop auto-scrolling entirely until they scroll back into
+  //     the live zone or the next user message resets it.
+  let userScrolledAway = false;
   function autoScroll() {
+    if (userScrolledAway) return;
     const m = $messages;
-    const nearBottom = m.scrollHeight - m.scrollTop - m.clientHeight < 80;
-    if (nearBottom) m.scrollTop = m.scrollHeight;
+    const distFromBottom = m.scrollHeight - m.scrollTop - m.clientHeight;
+    if (distFromBottom < 200) m.scrollTop = m.scrollHeight;
+  }
+  if ($messages) {
+    $messages.addEventListener('scroll', () => {
+      const m = $messages;
+      const distFromBottom = m.scrollHeight - m.scrollTop - m.clientHeight;
+      // If user scrolled into the live zone, re-enable auto-scroll. Otherwise
+      // (they walked away from the bottom), suppress auto-scroll.
+      userScrolledAway = distFromBottom > 240;
+    }, { passive: true });
   }
 
   function clearEmpty() {
@@ -469,9 +514,21 @@
     const who = document.createElement('div');
     who.className = 'who';
     who.textContent = kind === 'thinking' ? 'thinking' : 'claude';
+    msg.appendChild(who);
+    // Whole-message copy button for assistant blocks — code-block copy
+    // already exists, but folks often want to grab the whole reply too.
+    // Thinking blocks skip this (it's internal scratch, not the response).
+    if (wantClass === 'assistant') {
+      const copyBtn = document.createElement('button');
+      copyBtn.type = 'button';
+      copyBtn.className = 'msg-copy';
+      copyBtn.title = '复制整条回复';
+      copyBtn.setAttribute('aria-label', '复制整条回复');
+      copyBtn.textContent = '📋';
+      msg.appendChild(copyBtn);
+    }
     const body = document.createElement('div');
     body.className = 'body';
-    msg.appendChild(who);
     msg.appendChild(body);
     $messages.appendChild(msg);
     autoScroll();
@@ -515,6 +572,10 @@
         state.el.textContent = state.rawText;
       } else {
         state.el.innerHTML = renderMarkdown(state.rawText);
+        // Highlight during stream so code blocks aren't bare grey until
+        // assistant_block_end fires. hljs idempotent-skips elements that
+        // already have .hljs class so re-running on every tick is cheap.
+        highlightInside(state.el);
       }
       autoScroll();
     }, wait);
@@ -564,6 +625,9 @@
   // ─── user message ─────────────────────────────────────────────
   function appendUser(text, images) {
     clearEmpty();
+    // User just spoke — they almost certainly want to see the upcoming reply,
+    // so reset the "I'm reading history" flag.
+    userScrolledAway = false;
     const div = document.createElement('div');
     div.className = 'msg user';
     const who = document.createElement('div');
