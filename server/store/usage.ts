@@ -22,7 +22,9 @@ export type UsageEvent = {
   name: string;
   /** 'pwa' | 'apk' — which client shell */
   shell?: string;
-  /** 'mobile' | 'desktop' — coarse form factor (from UA + viewport) */
+  /** 'mobile' | 'tablet' | 'desktop' — coarse form factor (from UA + viewport;
+   *  see usageForm() in static/app.js: touch+narrow⇒mobile, touch⇒tablet, else
+   *  desktop). Kept as a free string so new buckets don't need a type change. */
   form?: string;
   /** coarse, content-free props (counts/booleans/enums only) */
   props?: Record<string, unknown>;
