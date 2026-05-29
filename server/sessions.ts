@@ -10,6 +10,7 @@ import type { Hono, Context } from 'hono';
 import type { SessionMessagesResponse, SessionSummary } from '../shared/types.ts';
 import { agents, externalSessions, ownerOfSession } from './harness/registry.ts';
 import { activeSessionIds } from './ws.ts';
+import { attentionStore } from './store/attention.ts';
 
 const CONFIG_DIR  = join(homedir(), '.config', 'agentphone');
 const LABELS_PATH = join(CONFIG_DIR, 'labels.json');
@@ -42,6 +43,8 @@ export async function listAllSessions(): Promise<SessionSummary[]> {
       if (ext) {
         s.external = { pid: ext.pid, account: ext.account, kind: ext.kind, status: ext.status };
       }
+      const att = attentionStore.get(s.sessionId);
+      if (att) s.attention = att;
       all.push(s);
     }
   }

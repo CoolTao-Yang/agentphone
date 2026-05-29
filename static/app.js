@@ -1487,6 +1487,19 @@
           }
           break;
         }
+        case 'attention': {
+          // A session gained/lost an unread marker (UX #9). If it's the
+          // session we're actively viewing AND the tab is visible, we're
+          // already seeing it — tell the server to clear it (so no stale
+          // dot lingers). Otherwise mark the drawer entry + app badge.
+          if (m.sessionId === currentSessionId && !document.hidden && m.kind) {
+            sendWS({ type: 'mark_seen', sessionId: m.sessionId });
+            setSessionAttention(m.sessionId, null);
+          } else {
+            setSessionAttention(m.sessionId, m.kind || null);
+          }
+          break;
+        }
         case 'agent_event':
           lastEventAt = Date.now();
           if (m.turnId && m.turnId !== lastTurnId) {
@@ -1612,7 +1625,49 @@
 
   function renderSessionList(sessions) {
     allSessions = sessions || [];
+    // Merge any live attention events that arrived before this session was
+    // listed (and drop ones now reflected by the server's own field).
+    for (const s of allSessions) {
+      if (pendingAttention.has(s.sessionId)) {
+        s.attention = pendingAttention.get(s.sessionId);
+        pendingAttention.delete(s.sessionId);
+      }
+    }
     applySessionFilter();
+    updateAppBadge();
+  }
+
+  // Update one session's unread marker in the local list + re-render drawer
+  // + refresh the OS app badge (UX #9). If the session isn't in the loaded
+  // list yet, stash it so the next loadSessions() can apply it.
+  const pendingAttention = new Map();  // sid → kind (for sessions not yet listed)
+  function setSessionAttention(sid, kind) {
+    let found = false;
+    for (const s of allSessions) {
+      if (s.sessionId === sid) { s.attention = kind || undefined; found = true; break; }
+    }
+    if (!found && kind) pendingAttention.set(sid, kind);
+    else pendingAttention.delete(sid);
+    applySessionFilter();
+    updateAppBadge();
+  }
+
+  // OS app-icon badge = count of sessions needing action (needs_input/error).
+  // 'done' is a soft marker only, not badge-worthy. PWA/installed only;
+  // no-ops gracefully where unsupported.
+  function updateAppBadge() {
+    let n = 0;
+    for (const s of allSessions) {
+      if (s.attention === 'needs_input' || s.attention === 'error') n++;
+    }
+    for (const k of pendingAttention.values()) {
+      if (k === 'needs_input' || k === 'error') n++;
+    }
+    try {
+      if (navigator.setAppBadge) {
+        if (n > 0) navigator.setAppBadge(n); else navigator.clearAppBadge && navigator.clearAppBadge();
+      }
+    } catch { /* unsupported — fine */ }
   }
 
   function applySessionFilter() {
@@ -1636,16 +1691,30 @@
       const div = document.createElement('div');
       const extBusy = s.external?.status === 'busy';
       const extIdle = s.external?.status === 'idle';
+      const att = s.attention || null;  // 'needs_input' | 'error' | 'done' | null
       div.className = 'session-item'
         + (s.sessionId === currentSessionId ? ' active' : '')
         + (s.running ? ' running' : '')
-        + (extBusy ? ' ext-busy' : extIdle ? ' ext-idle' : '');
+        + (extBusy ? ' ext-busy' : extIdle ? ' ext-idle' : '')
+        + (att ? ' attn attn-' + att : '');
       div.dataset.sid = s.sessionId;
       div.dataset.cwd = s.cwd;
 
       const name = document.createElement('div');
       name.className = 'si-name' + (s.name ? '' : ' unnamed');
-      name.textContent = s.name || '(未命名)';
+      // Unread marker (UX #9): a leading dot whose colour/pulse encodes the
+      // kind — 🔔 needs-input (amber, pulsing) is the urgent one.
+      if (att) {
+        const dot = document.createElement('span');
+        dot.className = 'attn-dot attn-dot-' + att;
+        dot.title = att === 'needs_input' ? '等待你确认工具调用'
+          : att === 'error' ? '出错了' : '有新回复';
+        dot.textContent = att === 'needs_input' ? '🔔' : att === 'error' ? '⚠️' : '●';
+        name.appendChild(dot);
+      }
+      const nameText = document.createElement('span');
+      nameText.textContent = s.name || '(未命名)';
+      name.appendChild(nameText);
       const agent = s.agent || 'claude';
       const badge = document.createElement('span');
       badge.className = `agent-badge agent-${agent}`;
@@ -1721,6 +1790,9 @@
     clearMessages();
     currentSessionId = sessionId;
     setCwdDisplay(cwd);
+    // Viewing it = seeing it → clear its unread marker optimistically (the
+    // server also clears on select_session and broadcasts the cleared state).
+    setSessionAttention(sessionId, null);
     closeDrawer();
     showToast(`已切换到 session ${sessionId.slice(0,8)}`, 'info');
     // Materialize last ~30 history messages so the phone shows the same

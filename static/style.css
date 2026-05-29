@@ -1506,3 +1506,18 @@ footer {
   color: var(--warn);
   font-weight: 400;
 }
+
+/* ───── Drawer unread / attention markers (UX-BACKLOG #9) ───── */
+.session-item.attn-needs_input { border-left: 2px solid var(--warn); }
+.session-item.attn-error       { border-left: 2px solid var(--error); }
+.si-name .attn-dot {
+  flex: 0 0 auto;
+  font-size: 12px;
+  line-height: 1;
+  margin-right: 2px;
+}
+.si-name .attn-dot-needs_input { animation: pulse 1.4s ease-in-out infinite; }
+.si-name .attn-dot-error { }
+.si-name .attn-dot-done { color: var(--ok); font-size: 9px; }
+/* si-name is a flex row already; make sure the new spans align */
+.si-name { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }

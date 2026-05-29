@@ -29,6 +29,7 @@ import {
   classifyTurnError,
   type PushPayload,
 } from './push.ts';
+import { attentionStore } from './store/attention.ts';
 
 // Everything that flows out of the runner. We unify under one shape so the
 // replay buffer is a flat list. tool_request is an AgentEvent kind too — the
@@ -224,6 +225,7 @@ export class TurnRunner {
           url: '/launch',
           sessionId: this.currentSessionId ?? undefined,
         });
+        if (this.currentSessionId) attentionStore.set(this.currentSessionId, 'needs_input');
       });
     };
 
@@ -263,6 +265,7 @@ export class TurnRunner {
           url: '/launch',
           sessionId: this.currentSessionId ?? undefined,
         });
+        if (this.currentSessionId) attentionStore.set(this.currentSessionId, 'done');
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         const stack = err instanceof Error ? err.stack : '';
@@ -283,6 +286,7 @@ export class TurnRunner {
           url: '/launch',
           sessionId: this.currentSessionId ?? undefined,
         });
+        if (this.currentSessionId) attentionStore.set(this.currentSessionId, 'error');
       } finally {
         this.active = null;
         // Resolve any tools left hanging (shouldn't happen normally) so we

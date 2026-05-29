@@ -29,6 +29,8 @@ export type ClientMessage =
   // (CLI / bg job) is also driving. Until takeover is sent, the server tells
   // the client `followMode:true` and rejects prompts.
   | { type: 'takeover'; sessionId: string }
+  // Clear a session's unread/attention marker — sent when the user views it.
+  | { type: 'mark_seen'; sessionId: string }
   // β path: phone writes the text as a user message into an externally-owned
   // session's jsonl. cmax sees it as a queued user prompt — desktop user
   // presses Enter to actually trigger the response (or cmax auto-fires if
@@ -59,6 +61,12 @@ export type ClientMessage =
   | { type: 'fork_session'; externalSessionId: string; cwd?: string };
 
 export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
+// Per-session "needs attention" signal for the drawer unread marker
+// (UX-BACKLOG #9). needs_input = a tool is waiting for approval (most
+// urgent); error = the turn failed; done = the turn finished. needs_input
+// and error drive the app badge count; done is a subtle marker only.
+export type AttentionKind = 'needs_input' | 'error' | 'done';
 
 export type AgentSettings = {
   autoApproveTools: boolean;
@@ -115,7 +123,11 @@ export type ServerMessage =
   | { type: 'external_status'; sessionId: string; external: ExternalSessionStatus | null }
   // Echo of the current link state for a phone-owned session. Server sends
   // after set_link or on initial select_session if a saved link exists.
-  | { type: 'link_info'; phoneSessionId: string; externalSessionId: string | null };
+  | { type: 'link_info'; phoneSessionId: string; externalSessionId: string | null }
+  // A session's attention state changed (UX-BACKLOG #9). Broadcast to ALL
+  // connected clients so every drawer updates its unread marker live, even
+  // for sessions the client isn't currently subscribed to. null = cleared.
+  | { type: 'attention'; sessionId: string; kind: AttentionKind | null };
 
 export type ExternalSessionStatus = {
   pid: number;
@@ -160,6 +172,8 @@ export type SessionSummary = {
    *  bg job, …). Drawer renders a 🟢 dot; selecting the session enters
    *  follow-mode. */
   external?: ExternalSessionStatus | null;
+  /** Unseen-activity marker for the drawer (UX-BACKLOG #9). */
+  attention?: AttentionKind | null;
 };
 
 export type SeqEvent = {

@@ -23,6 +23,7 @@ import { watchJsonl, jsonlPathFor } from './harness/cmax-external/jsonl-watcher.
 import { appendInjectUserMessage, appendMirrorEntry, mergeFromPhoneSession, buildHistoryPrefix } from './harness/cmax-external/jsonl-writer.ts';
 import { findSessionFile } from './harness/claude-sdk/adapter.ts';
 import { linkStore } from './store/links.ts';
+import { attentionStore } from './store/attention.ts';
 
 function externalStatusFor(sessionId: string | null): ExternalSessionStatus | null {
   if (!sessionId) return null;
@@ -48,6 +49,20 @@ let agentSettings: AgentSettings = {
 // All currently-open WS senders. set_settings broadcasts to every entry on
 // successful update so other clients see the change without polling.
 const broadcasters = new Set<(msg: ServerMessage) => void>();
+
+function broadcastAll(msg: ServerMessage): void {
+  for (const b of broadcasters) {
+    try { b(msg); } catch { /* ignore individual delivery failure */ }
+  }
+}
+
+// Attention changes (set by the TurnRunner when it fires needs_input / error
+// / done pushes) fan out to EVERY connected client so all drawers update
+// their unread marker live — even for sessions a given client isn't
+// subscribed to. Registered once at module load. (UX-BACKLOG #9)
+attentionStore.onChange((sessionId, kind) => {
+  broadcastAll({ type: 'attention', sessionId, kind });
+});
 
 const PHONE_LOG_PATH = '/tmp/agentphone-phone.log';
 const PHONE_LOG_MAX_BYTES = 1_000_000;
@@ -358,6 +373,8 @@ function createHandler(c: any, cfg: Cfg) {
         if (msg.cwd) myCurrentCwd = msg.cwd;
         // Switching sessions clears any takeover acknowledgment.
         myTakeoverSid = null;
+        // Viewing a session = seeing it → clear its unread marker (UX #9).
+        if (msg.sessionId) attentionStore.clear(msg.sessionId);
 
         const newRunner = getRunnerForSession(myCurrentSessionId);
         if (msg.sessionId) {
@@ -406,6 +423,13 @@ function createHandler(c: any, cfg: Cfg) {
           myTakeoverSid = msg.sessionId;
           console.log(`[ws] takeover accepted for sessionId=${msg.sessionId}`);
         }
+        return;
+      }
+
+      if (msg.type === 'mark_seen') {
+        // Client viewed a session → clear its unread marker. attentionStore
+        // broadcasts the cleared state to every client so all drawers sync.
+        attentionStore.clear(msg.sessionId);
         return;
       }
 

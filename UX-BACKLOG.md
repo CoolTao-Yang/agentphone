@@ -21,8 +21,15 @@
 > user switched away from is cancelled rather than mis-sent. In-memory (survives network blips; an
 > OS app-kill is #12's territory).
 >
-> Next unstarted high-value: #8 rate-limit countdown · #9 drawer unread markers · #11 paste-image ·
-> #21 slash-command autocomplete.
+> **✅ SHIPPED 2026-05-29 (round 4):** #9 drawer unread markers + app badge — a server-side
+> attentionStore (set by the TurnRunner on needs_input/error/done) broadcasts to ALL clients so every
+> drawer marks the right session live (🔔 needs-input pulsing amber / ⚠️ error / ● done). /api/sessions
+> carries it; viewing a session (select_session / mark_seen) clears it; navigator.setAppBadge shows the
+> count of actionable (needs_input+error) sessions. Pairs with the #1 needs-input push: push says
+> "something needs you", the drawer dot + badge says "it's this session".
+>
+> Next unstarted high-value: #8 rate-limit countdown · #11 paste-image · #21 slash-command autocomplete ·
+> #32 edit-tool-args-before-approve.
 
 # agentphone UX Optimization Backlog
 
