@@ -1177,20 +1177,44 @@
               appended++;
             }
             const sec = Math.max(1, Math.round((Date.now() - m.activeTurn.startedAt) / 1000));
-            const sep = document.createElement('div');
-            sep.className = 'history-sep';
-            sep.textContent = !sameTurn
+            // "Silent reconnect": same turn, no new events appended. Happens
+            // every time the phone backgrounds + foregrounds during an idle
+            // window. Without dedup the chat fills up with stacked
+            // "── 补齐 0 条新事件（断开 108s）──" markers, one per resume.
+            // Strategy: keep at most ONE trailing silent marker. If the
+            // previous trailing child is already a silent sep, *replace* its
+            // text in place — the user only ever sees the most recent
+            // reconnect time. Real-delta seps (appended > 0) stay as
+            // permanent history.
+            const silentReconnect = sameTurn && appended === 0;
+            const sepText = !sameTurn
               ? (m.activeTurn.done
                   ? `── 已恢复 ${m.activeTurn.events.length} 条事件（${sec}s 前完成）──`
                   : `── 已恢复 ${m.activeTurn.events.length} 条事件（${sec}s 前开始 · server 还在跑）──`)
               : `── 补齐 ${appended} 条新事件（断开 ${sec}s, 共 ${lastRenderedSeq+1} 条）──`;
-            $messages.appendChild(sep);
+            const lastChild = $messages.lastElementChild;
+            const lastIsSilentSep =
+              lastChild &&
+              lastChild.classList.contains('history-sep') &&
+              lastChild.classList.contains('silent');
+            if (silentReconnect && lastIsSilentSep) {
+              // In-place update of the existing trailing marker.
+              lastChild.textContent = sepText;
+            } else {
+              const sep = document.createElement('div');
+              sep.className = 'history-sep' + (silentReconnect ? ' silent' : '');
+              sep.textContent = sepText;
+              $messages.appendChild(sep);
+            }
             setBusy(!m.activeTurn.done);
-            showToast(
-              !sameTurn ? (m.activeTurn.done ? '已恢复（已完成）' : '已恢复进行中的对话')
-                        : `补齐 ${appended} 条`,
-              'ok', 2200
-            );
+            // Suppress the "补齐 0 条" toast — it's noise for silent reconnects.
+            if (!silentReconnect) {
+              showToast(
+                !sameTurn ? (m.activeTurn.done ? '已恢复（已完成）' : '已恢复进行中的对话')
+                          : `补齐 ${appended} 条`,
+                'ok', 2200
+              );
+            }
           } else {
             // Safety: clear any stale busy state from before disconnect.
             setBusy(false);
