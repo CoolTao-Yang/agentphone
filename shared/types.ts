@@ -7,7 +7,10 @@ export type ClientMessage =
   | { type: 'prompt'; text: string; images?: ImageAttachment[] }
   | { type: 'interrupt' }
   | { type: 'select_session'; sessionId: string | null; cwd?: string }
-  | { type: 'tool_response'; toolUseId: string; decision: 'allow' | 'deny'; allowRestOfTurn?: boolean }
+  // reason: optional free-text the user types when denying, fed back to the
+  // agent so they can redirect it ("use ripgrep instead") instead of just
+  // getting a canned rejection and having to wait out the turn.
+  | { type: 'tool_response'; toolUseId: string; decision: 'allow' | 'deny'; allowRestOfTurn?: boolean; reason?: string }
   // CRDT-style optimistic-concurrency update: client passes expectedVersion
   // (the version it last saw). Server rejects with `settings_conflict` if a
   // different client has updated in the meantime, then the rejected client

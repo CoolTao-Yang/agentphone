@@ -4,6 +4,12 @@
 > actual code against the cloned reference repos (see reference/REPOS.md). 51 items, ranked by
 > UX-impact-per-effort. Cites our file:line + the reference pattern. Effort: S=<2h, M=half-day, L=multi-day.
 > Pair with STATE.md (the living state) — this is the actionable detail behind its TODO.
+>
+> **✅ SHIPPED 2026-05-29** (the "DO 5 FIRST" set): #1 needs-input push · #2 error/rate-limit push ·
+> #3 vendored CDN libs locally (static/vendor/, SW v42) · #4 pairing validation · #5 deny-with-reason.
+> All push notifications now fire from the TurnRunner (server/runner.ts) — once each, even with zero
+> sockets attached. Next unstarted high-value: #6 offline outbox · #7 per-tool diff rendering ·
+> #8 rate-limit countdown · #9 drawer unread markers.
 
 # agentphone UX Optimization Backlog
 

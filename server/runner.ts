@@ -23,6 +23,12 @@ import type {
   AgentTurn,
   CanUseToolFn,
 } from './harness/types.ts';
+import {
+  sendToAll as sendPush,
+  toolInputSummary,
+  classifyTurnError,
+  type PushPayload,
+} from './push.ts';
 
 // Everything that flows out of the runner. We unify under one shape so the
 // replay buffer is a flat list. tool_request is an AgentEvent kind too — the
@@ -46,6 +52,28 @@ export class TurnRunner {
   private currentTurnId: string | null = null;
   private startedAtMs = 0;
   private seqCounter = 0;
+
+  // Latest known session id for this runner — seeded from start(opts.sessionId)
+  // and updated when a session_init event arrives (new sessions). Used as the
+  // push notification's target so a tapped notification opens the right session.
+  private currentSessionId: string | null = null;
+  // Accumulated assistant text for the current turn, for the turn_done push
+  // body. Reset at turn start.
+  private currentTurnText = '';
+
+  // Push notifications fire from HERE (not the per-socket WS subscriber) so
+  // each event notifies exactly once regardless of how many devices are
+  // attached — and crucially still fires when ZERO sockets are attached
+  // (phone backgrounded / disconnected), which is the whole point of push.
+  private firePush(payload: PushPayload): void {
+    sendPush(payload)
+      .then((r) => {
+        if (r.delivered + r.pruned > 0) {
+          console.log(`[push] ${payload.kind ?? 'note'} delivered=${r.delivered} pruned=${r.pruned}`);
+        }
+      })
+      .catch((e) => console.warn(`[push] ${payload.kind ?? 'note'} fan-out failed:`, e?.message));
+  }
 
   // Replay buffer — all emits for the current turn. Cleared at the start
   // of each new turn so we don't accumulate forever.
@@ -137,6 +165,8 @@ export class TurnRunner {
     this.approveAllForTurn.clear();
     this.startedAtMs = Date.now();
     this.seqCounter = 0;
+    this.currentSessionId = opts.sessionId;
+    this.currentTurnText = '';
 
     const autoApproveAll = !!opts.autoApproveAllTools;
     const perToolAuto = opts.autoApproveTools ?? {};
@@ -183,6 +213,17 @@ export class TurnRunner {
           event: { kind: 'tool_request', toolUseId, toolName, input, autoApproved: false },
           seq: this.nextSeq(),
         });
+        // The turn is now BLOCKED waiting on the user — and turn_done will
+        // never fire until they answer. This is the single most important
+        // moment to notify a backgrounded phone. Fires once per pending tool.
+        this.firePush({
+          kind: 'needs_input',
+          title: '🔔 Claude 需要确认',
+          body: toolInputSummary(toolName, input),
+          tag: `needs-input-${this.currentSessionId ?? this.currentTurnId ?? 'new'}`,
+          url: '/launch',
+          sessionId: this.currentSessionId ?? undefined,
+        });
       });
     };
 
@@ -202,9 +243,26 @@ export class TurnRunner {
     (async () => {
       try {
         for await (const event of turn.iterate()) {
+          // Track session id + assistant text for push bodies.
+          if (event.kind === 'session_init') {
+            this.currentSessionId = event.sessionId;
+          } else if (event.kind === 'text_delta') {
+            this.currentTurnText += event.delta;
+          }
           this.record({ kind: 'agent_event', event, seq: this.nextSeq() });
         }
         this.record({ kind: 'turn_done' });
+        // Turn finished cleanly → "done" push (moved here from ws.ts so it
+        // fires once, not once-per-attached-socket). Body = tail of the reply.
+        const body = this.currentTurnText.trim().slice(-180).replace(/\s+/g, ' ');
+        this.firePush({
+          kind: 'done',
+          title: '✅ Claude 回完了',
+          body: body || '（无文本回复，可能只用了 tool）',
+          tag: `turn-${this.currentSessionId ?? 'new'}`,
+          url: '/launch',
+          sessionId: this.currentSessionId ?? undefined,
+        });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         const stack = err instanceof Error ? err.stack : '';
@@ -213,6 +271,18 @@ export class TurnRunner {
           `(sessionId=${opts.sessionId ?? 'new'}, cwd=${opts.cwd}): ${msg}\n${stack}`
         );
         this.record({ kind: 'error', message: msg });
+        // Error while (likely) backgrounded → push so the user isn't left
+        // staring at a dead "思考中". Classified (context-limit / rate-limit /
+        // generic) without mis-labeling transient ede_diagnostic.
+        const { title, body } = classifyTurnError(msg);
+        this.firePush({
+          kind: 'error',
+          title,
+          body,
+          tag: `err-${this.currentSessionId ?? 'new'}`,
+          url: '/launch',
+          sessionId: this.currentSessionId ?? undefined,
+        });
       } finally {
         this.active = null;
         // Resolve any tools left hanging (shouldn't happen normally) so we
@@ -228,16 +298,22 @@ export class TurnRunner {
   }
 
   /** User decision on a pending tool request. */
-  respondToTool(toolUseId: string, decision: { allow: boolean; allowRestOfTurn?: boolean }): void {
+  respondToTool(toolUseId: string, decision: { allow: boolean; allowRestOfTurn?: boolean; reason?: string }): void {
     const p = this.pendingTools.get(toolUseId);
     if (!p) return;
     this.pendingTools.delete(toolUseId);
     if (decision.allow && decision.allowRestOfTurn) {
       this.approveAllForTurn.add(p.name);
     }
+    // On deny, prefer the user's typed reason (so the agent can redirect)
+    // and fall back to the canned message. The reason is already plumbed
+    // through to the SDK via the canUseTool resolve → adapter permission msg.
+    const denyReason = (decision.reason && decision.reason.trim())
+      ? decision.reason.trim()
+      : '用户在手机端拒绝了这个工具调用。';
     p.resolve({
       allow: decision.allow,
-      reason: decision.allow ? undefined : '用户在手机端拒绝了这个工具调用。',
+      reason: decision.allow ? undefined : denyReason,
     });
   }
 

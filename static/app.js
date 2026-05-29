@@ -863,6 +863,32 @@
       labelForever.appendChild(cbForever);
       labelForever.appendChild(lt2);
 
+      // Deny-with-reason: instead of an immediate canned rejection, the
+      // first 拒绝 click reveals an inline reason input. The user can type
+      // "用 ripgrep 重做" / "改文件路径" to steer the agent, or just confirm
+      // with an empty reason for a plain deny. The reason is plumbed all the
+      // way to the SDK (ws.ts → runner.respondToTool → canUseTool resolve).
+      const denyRow = document.createElement('div');
+      denyRow.className = 'deny-reason-row';
+      denyRow.style.display = 'none';
+      const denyInput = document.createElement('input');
+      denyInput.type = 'text';
+      denyInput.className = 'deny-reason-input';
+      denyInput.placeholder = '可选: 为什么拒绝 / 该怎么做 (如: 用 ripgrep)';
+      const denyConfirm = document.createElement('button');
+      denyConfirm.className = 'tool-btn deny';
+      denyConfirm.textContent = '✗ 确认拒绝';
+      denyRow.appendChild(denyInput);
+      denyRow.appendChild(denyConfirm);
+
+      function doDeny() {
+        const reason = denyInput.value.trim();
+        sendWS({ type: 'tool_response', toolUseId, decision: 'deny', reason: reason || undefined });
+        markToolResolved(toolUseId, 'deny');
+      }
+      denyConfirm.addEventListener('click', doDeny);
+      denyInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') doDeny(); });
+
       allowBtn.addEventListener('click', () => {
         if (cbForever.checked) {
           // persist server-side via settings
@@ -874,14 +900,17 @@
         markToolResolved(toolUseId, 'allow');
       });
       denyBtn.addEventListener('click', () => {
-        sendWS({ type: 'tool_response', toolUseId, decision: 'deny' });
-        markToolResolved(toolUseId, 'deny');
+        // First click reveals the reason input rather than denying outright.
+        denyRow.style.display = 'flex';
+        denyBtn.style.display = 'none';
+        setTimeout(() => { try { denyInput.focus(); } catch {} }, 30);
       });
 
       approveBox.appendChild(labelAll);
       approveBox.appendChild(labelForever);
       approveBox.appendChild(denyBtn);
       approveBox.appendChild(allowBtn);
+      approveBox.appendChild(denyRow);
       card.appendChild(approveBox);
     }
 

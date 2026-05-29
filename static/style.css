@@ -1405,3 +1405,37 @@ footer {
   .h-btn { width: 26px; height: 26px; font-size: 12px; }
   .h-title .brand-prefix { display: none; }
 }
+
+/* Bootstrap pairing inline error (UX-BACKLOG #4) */
+.bootstrap .bs-error {
+  color: var(--error);
+  background: rgba(248, 113, 113, 0.10);
+  border: 1px solid rgba(248, 113, 113, 0.35);
+  border-radius: 6px;
+  padding: 8px 11px;
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 8px 0 0;
+  white-space: pre-line;
+}
+
+/* Deny-with-reason inline input (UX-BACKLOG #5) */
+.tool-approve .deny-reason-row {
+  flex-basis: 100%;
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+.tool-approve .deny-reason-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 13px;
+  padding: 6px 9px;
+  outline: none;
+}
+.tool-approve .deny-reason-input:focus { border-color: var(--error); }

@@ -17,11 +17,13 @@
   <link rel="apple-touch-icon" href="icon.svg">
 
   <link rel="stylesheet" href="style.css">
-  <link rel="stylesheet"
-        href="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11/styles/atom-one-dark.min.css">
+  <!-- Vendored locally (static/vendor/) — these are render-critical (markdown,
+       code highlight) so they MUST work offline + inside the bundled APK.
+       Loading them from a CDN broke both. See UX-BACKLOG.md #3. -->
+  <link rel="stylesheet" href="./vendor/highlight-atom-one-dark.min.css">
 
-  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js" defer></script>
-  <script src="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11/highlight.min.js" defer></script>
+  <script src="./vendor/marked.min.js" defer></script>
+  <script src="./vendor/highlight.min.js" defer></script>
 
   <script>
     if ('serviceWorker' in navigator) {
@@ -196,22 +198,60 @@
 
       var input = document.getElementById('bs-url');
       var go = document.getElementById('bs-go');
+      var errEl = document.getElementById('bs-error');
+      function showErr(msg) {
+        showBootstrap();                 // re-reveal the form (keeps typed value)
+        if (errEl) { errEl.textContent = msg; errEl.style.display = 'block'; }
+      }
+      function clearErr() { if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; } }
+
+      // Validate the token against /api/sessions: true=200, false=401/403,
+      // null=couldn't determine (network/other → don't block).
+      function checkToken(base, token) {
+        return new Promise(function (resolve) {
+          var ctrl; try { ctrl = new AbortController(); } catch (e) { ctrl = null; }
+          var to = setTimeout(function () { if (ctrl) try { ctrl.abort(); } catch (e) {} resolve(null); }, 2500);
+          var opts = { method: 'GET', cache: 'no-store' };
+          if (ctrl) opts.signal = ctrl.signal;
+          fetch(base + '/api/sessions?token=' + encodeURIComponent(token), opts)
+            .then(function (r) {
+              clearTimeout(to);
+              if (r.status === 401 || r.status === 403) resolve(false);
+              else if (r.ok) resolve(true);
+              else resolve(null);
+            })
+            .catch(function () { clearTimeout(to); resolve(null); });
+        });
+      }
+
+      // Validate BEFORE persisting + redirecting, so a typo'd IP / wrong port /
+      // off-tailnet / bad token shows an inline error instead of dropping the
+      // user on a blank hung WebView (UX-BACKLOG #4).
       function commit(raw) {
+        clearErr();
         var p = parseConfigUrl(raw);
-        if (!p || !p.base) { alert('URL 无效'); return; }
-        if (!p.token) {
-          alert('URL 里没带 ?token=… — 请扫桌面 CLI 启动时打印的 QR (含 token)');
-          return;
-        }
-        try {
-          localStorage.setItem(URL_KEY, p.base);
-          localStorage.setItem(TOKEN_KEY, p.token);
-        } catch (e) {}
-        // First setup: go straight to server-hosted UI (it'll be reachable
-        // since the user just typed the URL). Skips the probe — they just
-        // told us where it is, no need to second-guess.
+        if (!p || !p.base) { showErr('URL 无效'); return; }
+        if (!p.token) { showErr('URL 里没带 ?token=… — 请扫桌面 CLI 启动时打印的 QR (含 token)'); return; }
         showSplash('连接中…');
-        location.replace(p.base + '/launch');
+        probeServer(p.base).then(function (alive) {
+          if (!alive) {
+            showErr('连不上 ' + p.base + '\n检查 IP / 端口，确认手机和电脑在同一 Tailscale 网络。');
+            return;
+          }
+          checkToken(p.base, p.token).then(function (tokOk) {
+            if (tokOk === false) {
+              showErr('地址能连上，但 token 不对 — 重新扫一次 QR。');
+              return;
+            }
+            // tokOk === true (verified) or null (couldn't check, but server is
+            // reachable) → proceed.
+            try {
+              localStorage.setItem(URL_KEY, p.base);
+              localStorage.setItem(TOKEN_KEY, p.token);
+            } catch (e) {}
+            location.replace(p.base + '/launch');
+          });
+        });
       }
       if (go) go.addEventListener('click', function () {
         commit(input && input.value);
@@ -224,7 +264,7 @@
   </script>
 
   <script src="app.js" defer></script>
-  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js" defer></script>
+  <script src="./vendor/jsQR.js" defer></script>
 </head>
 <body>
   <!-- Bootstrap form, only shown inside Capacitor APK on first launch -->
@@ -237,6 +277,7 @@
       <button id="bs-go" type="button">连接</button>
       <button id="bs-scan" type="button">📷 扫码自动填</button>
     </div>
+    <p class="bs-error" id="bs-error" style="display:none"></p>
     <p class="hint">
       通常是 <code>http://&lt;Tailscale IP&gt;:8765</code><br>
       或者 <strong>扫描桌面 CLI 启动时打印的 QR</strong>（systemd journal 也能看到）

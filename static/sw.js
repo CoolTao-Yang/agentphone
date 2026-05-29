@@ -2,7 +2,7 @@
 // offline (the WebSocket of course still needs network). Updates on every
 // /sw.js change because we re-fetch index.html on activate.
 
-const CACHE = 'agentphone-shell-v41';
+const CACHE = 'agentphone-shell-v42';
 
 const SHELL = [
   './',
@@ -11,6 +11,12 @@ const SHELL = [
   './style.css',
   './manifest.webmanifest',
   './icon.svg',
+  // Vendored render-critical libs (UX-BACKLOG #3) — precache so markdown,
+  // code highlight, and QR onboarding work offline + inside the bundled APK.
+  './vendor/marked.min.js',
+  './vendor/highlight.min.js',
+  './vendor/highlight-atom-one-dark.min.css',
+  './vendor/jsQR.js',
 ];
 
 self.addEventListener('install', (event) => {

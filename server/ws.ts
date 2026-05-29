@@ -23,7 +23,6 @@ import { watchJsonl, jsonlPathFor } from './harness/cmax-external/jsonl-watcher.
 import { appendInjectUserMessage, appendMirrorEntry, mergeFromPhoneSession, buildHistoryPrefix } from './harness/cmax-external/jsonl-writer.ts';
 import { findSessionFile } from './harness/claude-sdk/adapter.ts';
 import { linkStore } from './store/links.ts';
-import { sendToAll as sendPushToAll } from './push.ts';
 
 function externalStatusFor(sessionId: string | null): ExternalSessionStatus | null {
   if (!sessionId) return null;
@@ -237,26 +236,10 @@ function createHandler(c: any, cfg: Cfg) {
             console.error('[ws] mirror write failed:', e instanceof Error ? e.message : String(e));
           });
           send({ type: 'turn_done' });
-          // Push notification to all registered devices. Body uses up to the
-          // last 100 chars of the assistant reply so the lock-screen preview
-          // is meaningful. The SW handler navigates to /launch on click and
-          // the client auto-selects the session via ?session= query.
-          const sidForPush = myCurrentSessionId ?? 'new';
-          const assistantSummary = myCurrentTurnAssistantText
-            .trim()
-            .slice(-180)
-            .replace(/\s+/g, ' ');
-          sendPushToAll({
-            title: '✅ Claude 回完了',
-            body: assistantSummary || '（无文本回复，可能只用了 tool）',
-            tag: `turn-${sidForPush}`,
-            url: `/launch`,
-            sessionId: myCurrentSessionId ?? undefined,
-          }).then((r) => {
-            if (r.delivered + r.pruned > 0) {
-              console.log(`[push] turn_done sent: delivered=${r.delivered} pruned=${r.pruned}`);
-            }
-          }).catch((e) => console.warn('[push] turn_done fan-out failed:', e?.message));
+          // NOTE: push notifications (done / needs_input / error) now fire
+          // from the TurnRunner itself (server/runner.ts) so each fires
+          // exactly once regardless of how many sockets are attached, and
+          // still fires when zero sockets are attached. Don't re-push here.
           // Reset capture buffers for the next turn on this session.
           myCurrentTurnPrompt = '';
           myCurrentTurnAssistantText = '';
@@ -435,6 +418,7 @@ function createHandler(c: any, cfg: Cfg) {
         if (myRunner) myRunner.respondToTool(msg.toolUseId, {
           allow: msg.decision === 'allow',
           allowRestOfTurn: msg.allowRestOfTurn,
+          reason: msg.reason,
         });
         return;
       }

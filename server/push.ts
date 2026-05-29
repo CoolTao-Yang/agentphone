@@ -29,6 +29,8 @@ export function vapidPublicKey(): string | null {
   return process.env.VAPID_PUBLIC ?? null;
 }
 
+export type PushKind = 'needs_input' | 'error' | 'done';
+
 export type PushPayload = {
   title: string;
   body: string;
@@ -38,7 +40,47 @@ export type PushPayload = {
   url?: string;
   /** Optional session id for the client to pre-select after focus. */
   sessionId?: string;
+  /** Semantic kind — lets the SW pick urgency (e.g. requireInteraction for
+   *  needs_input/error) and the client route the tap. */
+  kind?: PushKind;
 };
+
+// ── Push body helpers ────────────────────────────────────────
+
+/** One-line, lock-screen-friendly summary of a tool call. Mirrors the
+ *  client's oneLineInputSummary (static/app.js) but lives server-side so the
+ *  runner can build a meaningful "Claude 需要确认" body. */
+export function toolInputSummary(toolName: string, input: unknown): string {
+  let detail = '';
+  if (typeof input === 'string') {
+    detail = input;
+  } else if (input && typeof input === 'object') {
+    const obj = input as Record<string, unknown>;
+    for (const k of ['command', 'file_path', 'path', 'pattern', 'query', 'url', 'prompt', 'description']) {
+      const v = obj[k];
+      if (typeof v === 'string' && v.trim()) { detail = v; break; }
+    }
+    if (!detail) {
+      try { detail = JSON.stringify(input); } catch { /* ignore */ }
+    }
+  }
+  detail = detail.replace(/\s+/g, ' ').trim().slice(0, 100);
+  return detail ? `${toolName}: ${detail}` : toolName;
+}
+
+/** Classify a turn error into a push title/kind. Mirrors the client's
+ *  realContextLimit / sdkDiagnostic logic (static/app.js) so we don't
+ *  mis-label a transient ede_diagnostic as "上下文已满". */
+export function classifyTurnError(msg: string): { title: string; body: string } {
+  const m = String(msg || '');
+  const realContextLimit =
+    /prompt\s*is\s*too\s*long|context[\s_-]*length[\s_-]*exceeded|maximum.*context[\s_-]*length|context\s*window.*exceed|exceeded.*context\s*window|tokens?\s*exceed.*context/i.test(m);
+  const rateLimit =
+    /rate.?limit|usage limit|too many requests|\b429\b|resets? at|quota/i.test(m);
+  if (realContextLimit) return { title: '⚠️ 上下文已满', body: '点开压缩或新建 session' };
+  if (rateLimit) return { title: '⏳ 已被限流', body: m.slice(0, 140) };
+  return { title: '⚠️ 出错了', body: m.slice(0, 140) || 'Claude turn 失败' };
+}
 
 export async function sendToAll(payload: PushPayload): Promise<{ delivered: number; pruned: number }> {
   if (!ensureInit()) return { delivered: 0, pruned: 0 };
