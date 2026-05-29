@@ -612,21 +612,6 @@
         // renderMarkdown on the same rawText so the final state is clean.
         state.el.innerHTML = renderMarkdownStream(state.rawText);
         highlightInside(state.el);
-        // DEBUG (remove when streaming-render UX stabilises): log enough to
-        // diagnose without exposing full rawText. Tracks render cadence +
-        // whether marked is alive + whether the tail is in stream-tail mode.
-        if (state.rawText.length % 600 < 80 || state.rawText.length < 200) {
-          const hasTable = /<table/.test(state.el.innerHTML);
-          const hasTailDiv = /class="stream-tail"/.test(state.el.innerHTML);
-          const hasUglyPipe = /<p>\s*\|/.test(state.el.innerHTML);
-          const lastBreak = state.rawText.lastIndexOf('\n\n');
-          log('info',
-            `[render] kind=${state.kind} chars=${state.rawText.length} ` +
-            `marked=${!!window.marked} hasTable=${hasTable} ` +
-            `streamTail=${hasTailDiv} uglyPipe=${hasUglyPipe} ` +
-            `lastBreak@${lastBreak} tailHead="${state.rawText.slice(lastBreak+2, lastBreak+2+50).replace(/\n/g,'\\n')}"`,
-          );
-        }
       }
       autoScroll();
     }, wait);
@@ -669,13 +654,6 @@
     if (sText) {
       sText.el.innerHTML = renderMarkdown(sText.rawText);
       highlightInside(sText.el);
-      // DEBUG: confirm final render path took the full renderMarkdown.
-      const hasTable = /<table/.test(sText.el.innerHTML);
-      const hasUglyPipe = /<p>\s*\|/.test(sText.el.innerHTML);
-      log('info',
-        `[render:final] block_end kind=text chars=${sText.rawText.length} ` +
-        `marked=${!!window.marked} hasTable=${hasTable} uglyPipe=${hasUglyPipe}`,
-      );
       if (ttsOn) speak(stripForTTS(sText.rawText));
     }
     const kKey = `${evt.messageId}:thinking`;
