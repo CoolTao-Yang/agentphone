@@ -224,6 +224,21 @@ button.h-summary.is-set { color: var(--accent-2); border-color: var(--accent); }
 .model-list li.is-active .m-name { color: var(--accent-2); }
 .model-list li.is-active .m-name::after { content: '✓'; color: var(--accent); }
 .model-list .m-desc { font-size: 11.5px; color: var(--muted); line-height: 1.35; }
+/* custom model id escape hatch */
+.model-custom { display: flex; gap: 6px; margin-top: 8px; }
+.model-custom input {
+  flex: 1 1 auto; min-width: 0;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 7px; color: var(--text);
+  font-family: var(--mono); font-size: 12px; padding: 7px 9px; outline: none;
+}
+.model-custom input:focus { border-color: var(--accent); }
+.model-custom button {
+  flex: 0 0 auto; padding: 0 13px; border-radius: 7px;
+  background: var(--surface); color: var(--muted);
+  border: 1px solid var(--border); font-size: 12px; cursor: pointer;
+}
+.model-custom button:hover { color: var(--accent-2); border-color: var(--accent); }
 /* effort segmented control */
 .seg { display: flex; gap: 4px; flex-wrap: wrap; }
 .seg button {

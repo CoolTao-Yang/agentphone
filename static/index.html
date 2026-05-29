@@ -478,6 +478,15 @@
         <div class="sheet-label">模型</div>
         <!-- rows built dynamically from /api/models (name + description) -->
         <ul class="model-list" id="model-list" role="radiogroup" aria-label="模型"></ul>
+        <!-- Escape hatch: the SDK's model list can lag what the API actually
+             accepts (e.g. claude-opus-4-8 works but isn't listed). Type any
+             model id here to use it directly. -->
+        <div class="model-custom">
+          <input id="model-custom-input" type="text" inputmode="text" autocomplete="off"
+                 autocapitalize="off" spellcheck="false"
+                 placeholder="自定义模型 ID，如 claude-opus-4-8">
+          <button id="model-custom-apply" type="button">用</button>
+        </div>
       </div>
       <div class="sheet-section" id="effort-section">
         <div class="sheet-label">Effort（推理强度）</div>

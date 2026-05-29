@@ -83,6 +83,8 @@
   const $settingsBd      = document.getElementById('settings-bd');
   const $settingsClose   = document.getElementById('settings-close');
   const $modelList       = document.getElementById('model-list');
+  const $modelCustomInput = document.getElementById('model-custom-input');
+  const $modelCustomApply = document.getElementById('model-custom-apply');
   const $effortSeg       = document.getElementById('effort-seg');
   const $effortSection   = document.getElementById('effort-section');
   const $debugBtn   = document.getElementById('debug-toggle');
@@ -151,8 +153,9 @@
     if (!settings.model) return '默认';
     const mi = currentModelInfo();
     return (mi ? mi.displayName : settings.model)
-      .replace(/^Claude\s+/i, '')
-      .replace(/\s*\([^)]*\)/g, '')
+      .replace(/^Claude\s+/i, '')   // "Claude Opus" → "Opus"
+      .replace(/^claude-/i, '')     // custom id "claude-opus-4-8" → "opus-4-8"
+      .replace(/\s*\([^)]*\)/g, '') // drop "(recommended)"
       .trim() || settings.model;
   }
 
@@ -181,6 +184,8 @@
         li.classList.toggle('is-active', (li.getAttribute('data-model') || '') === (settings.model || ''));
       });
     }
+    // reflect a custom (unlisted) model id in the input; clear for known/默认
+    if ($modelCustomInput) $modelCustomInput.value = (settings.model && !mi) ? settings.model : '';
     // effort section — hidden entirely for models that ignore effort
     if ($effortSection) $effortSection.classList.toggle('hidden', !effortSupported);
     // effort segmented — active + restrict to the model's supported levels
@@ -2992,6 +2997,20 @@
       showToast('模型 → ' + name, 'ok', 1600);
     });
   }
+  // custom model id — use any model the API accepts even if the SDK doesn't
+  // list it (e.g. claude-opus-4-8). Apply on button click or Enter.
+  function applyCustomModel() {
+    if (!$modelCustomInput) return;
+    const val = $modelCustomInput.value.trim();
+    if (!val) return;
+    sendWS({ type: 'set_settings', model: val, expectedVersion: settings.version });
+    settings.model = val;
+    reflectSettings();
+    track('model_switch', { model: 'custom' });
+    showToast('模型 → ' + val, 'ok', 1800);
+  }
+  if ($modelCustomApply) $modelCustomApply.addEventListener('click', applyCustomModel);
+  if ($modelCustomInput) $modelCustomInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') applyCustomModel(); });
   if ($searchBox) $searchBox.addEventListener('input', applySessionFilter);
   if (navigator.connection && typeof navigator.connection.addEventListener === 'function') {
     navigator.connection.addEventListener('change', () => {
