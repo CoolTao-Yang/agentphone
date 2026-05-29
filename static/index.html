@@ -69,6 +69,7 @@
   </script>
 
   <script src="app.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js" defer></script>
 </head>
 <body>
   <!-- Bootstrap form, only shown inside Capacitor APK on first launch -->
@@ -77,15 +78,100 @@
     <p class="lead">第一次打开，需要告诉它你 desktop server 的地址</p>
     <input id="bs-url" type="url" autocomplete="off" autocapitalize="off"
            spellcheck="false" placeholder="http://100.119.115.75:8765">
-    <button id="bs-go" type="button">连接</button>
+    <div class="bs-row">
+      <button id="bs-go" type="button">连接</button>
+      <button id="bs-scan" type="button">📷 扫码自动填</button>
+    </div>
     <p class="hint">
       通常是 <code>http://&lt;Tailscale IP&gt;:8765</code><br>
-      或 <code>https://&lt;host&gt;.&lt;tailnet&gt;.ts.net</code>（开了 tailscale serve 后）
+      或者 <strong>扫描桌面 CLI 启动时打印的 QR</strong>（systemd journal 也能看到）
     </p>
     <p class="hint" style="opacity:.7">
-      可以以后改：长按 APK 图标 → app info → clear storage 重置。
+      以后改：长按 APK 图标 → app info → clear storage 重置。
     </p>
+    <!-- camera viewport (only visible while scanning) -->
+    <div id="bs-cam" class="bs-cam" style="display:none">
+      <video id="bs-cam-video" playsinline muted autoplay></video>
+      <canvas id="bs-cam-canvas" style="display:none"></canvas>
+      <p class="bs-cam-tip">把 QR 对准镜头, 识别到自动填</p>
+      <button id="bs-cam-cancel" type="button" class="bs-cam-cancel">取消</button>
+    </div>
   </section>
+
+  <script>
+  // QR scanner: only meaningful inside Capacitor / when camera available.
+  // Pure web tech (getUserMedia + jsQR), no Capacitor plugin needed.
+  (function () {
+    var scanBtn   = document.getElementById('bs-scan');
+    var camDiv    = document.getElementById('bs-cam');
+    var videoEl   = document.getElementById('bs-cam-video');
+    var canvasEl  = document.getElementById('bs-cam-canvas');
+    var cancelBtn = document.getElementById('bs-cam-cancel');
+    var urlInput  = document.getElementById('bs-url');
+    var goBtn     = document.getElementById('bs-go');
+    if (!scanBtn) return;
+
+    var stream = null;
+    var scanTimer = null;
+
+    function stopCam() {
+      if (scanTimer) { clearInterval(scanTimer); scanTimer = null; }
+      if (stream) {
+        stream.getTracks().forEach(function (t) { try { t.stop(); } catch (e) {} });
+        stream = null;
+      }
+      if (videoEl) videoEl.srcObject = null;
+      if (camDiv) camDiv.style.display = 'none';
+    }
+
+    scanBtn.addEventListener('click', function () {
+      if (!window.jsQR) {
+        alert('jsQR 还在加载中, 稍等一秒再试');
+        return;
+      }
+      camDiv.style.display = 'block';
+      navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment' },
+        audio: false,
+      }).then(function (s) {
+        stream = s;
+        videoEl.srcObject = s;
+        videoEl.setAttribute('playsinline', true);
+        return videoEl.play();
+      }).then(function () {
+        scanTimer = setInterval(function () { tryDecode(); }, 200);
+      }).catch(function (e) {
+        alert('无法打开摄像头: ' + (e.message || e));
+        stopCam();
+      });
+    });
+
+    cancelBtn.addEventListener('click', stopCam);
+
+    function tryDecode() {
+      if (!videoEl.videoWidth) return;
+      canvasEl.width = videoEl.videoWidth;
+      canvasEl.height = videoEl.videoHeight;
+      var ctx = canvasEl.getContext('2d');
+      ctx.drawImage(videoEl, 0, 0);
+      var imageData = ctx.getImageData(0, 0, canvasEl.width, canvasEl.height);
+      var code = window.jsQR(imageData.data, imageData.width, imageData.height);
+      if (!code) return;
+      var text = String(code.data || '').trim();
+      if (!text) return;
+      // The server-side QR encodes `http://<ip>:8765/launch`. We want just
+      // the origin (no /launch path) in the input so the existing connect
+      // handler can append /launch itself.
+      var url = text.replace(/\/launch\b.*$/, '').replace(/\/+$/, '');
+      urlInput.value = url;
+      stopCam();
+      // small feedback
+      try { goBtn.focus(); } catch (e) {}
+      // auto-connect for convenience
+      setTimeout(function () { goBtn.click(); }, 200);
+    }
+  })();
+  </script>
 
   <div id="app">
     <header>

@@ -12,6 +12,7 @@ import { mountSessionApi } from './sessions.ts';
 import { externalSessions } from './harness/registry.ts';
 import { pushStore } from './store/push.ts';
 import { vapidPublicKey } from './push.ts';
+import QRCode from 'qrcode';
 
 // Token resolution order:
 //   1. PHONE_AGENT_TOKEN env var (caller overrides everything)
@@ -120,6 +121,32 @@ externalSessions.start();
 
 mountSessionApi(app, TOKEN);
 mountWebSocket(app, upgradeWebSocket, { TOKEN, DEFAULT_CWD });
+
+// Multi-account info (P1.2). Lists ~/.claude-accounts/* (the dirs cmax
+// manages). Active = whatever CLAUDE_CONFIG_DIR points at right now. v1 is
+// read-only — switching at runtime requires Agent SDK env support we
+// don't yet have, so this just surfaces what's already configured.
+app.get('/api/accounts', (c) => {
+  if (c.req.query('token') !== TOKEN && c.req.header('x-token') !== TOKEN) {
+    return c.json({ error: 'unauthorized' }, 401);
+  }
+  const accountsDir = join(homedir(), '.claude-accounts');
+  const out: { name: string; path: string; active: boolean }[] = [];
+  if (existsSync(accountsDir)) {
+    try {
+      for (const name of readdirSync(accountsDir)) {
+        const path = join(accountsDir, name);
+        const active = CLAUDE_CONFIG_DIR === path;
+        out.push({ name, path, active });
+      }
+    } catch { /* ignore */ }
+  }
+  // Also surface the default ~/.claude if no accounts dir
+  if (!out.length) {
+    out.push({ name: '(default)', path: join(homedir(), '.claude'), active: true });
+  }
+  return c.json({ accounts: out, activePath: CLAUDE_CONFIG_DIR || null });
+});
 
 // ── HTTPS one-click setup ─────────────────────────────────────
 // Lets the phone tell the server "please run `tailscale serve --bg
@@ -254,6 +281,22 @@ app.delete('/api/push/subscribe', async (c) => {
   return c.json({ ok: true });
 });
 
+// Server-side QR for the /launch URL. Useful for the APK bootstrap so the
+// user can either scan from another phone OR see a "scan me" graphic right
+// in the manual-URL form.
+app.get('/api/launch-qr', async (c) => {
+  // Public on purpose — the QR encodes a URL that already includes the token.
+  const ip = c.req.query('ip');
+  if (!ip) return c.json({ error: 'missing ?ip=<tailscale-ip>' }, 400);
+  const url = `http://${ip}:${PORT}/launch`;
+  try {
+    const dataUrl = await QRCode.toDataURL(url, { width: 320, margin: 1 });
+    return c.json({ url, dataUrl });
+  } catch (e: any) {
+    return c.json({ error: e?.message || 'qr generation failed' }, 500);
+  }
+});
+
 // Stable bookmark target — phone bookmarks this single URL forever,
 // and we 302 it to the chat UI with the current token attached.
 // Open access on purpose: anyone who can reach the server (i.e. is on
@@ -299,6 +342,19 @@ const server = serve({ fetch: app.fetch, port: PORT, hostname: HOST }, (info) =>
   console.log('');
   console.log('First-time / shareable direct link:');
   for (const ip of ips) console.log(`   http://${ip}:${info.port}/?token=${TOKEN}`);
-  console.log('═══════════════════════════════════════════════════');
+  console.log('');
+  // Phone-scannable QR for the first launch URL (asciified so it shows up
+  // in the systemd journal too). Skips when tsIPs is empty.
+  if (tsIPs.length > 0) {
+    const primary = `http://${tsIPs[0]}:${info.port}/launch`;
+    QRCode.toString(primary, { type: 'terminal', small: true }, (err, qr) => {
+      if (err) return;
+      console.log('📱 phone QR (Chrome / APK 内 "扫码 自动填" 都能识别):');
+      console.log(qr.split('\n').map((l) => '  ' + l).join('\n'));
+      console.log('═══════════════════════════════════════════════════');
+    });
+  } else {
+    console.log('═══════════════════════════════════════════════════');
+  }
 });
 injectWebSocket(server);

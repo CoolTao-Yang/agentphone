@@ -515,8 +515,37 @@
       $hAcct.title = '';
     } else {
       $hAcct.textContent = name;
-      $hAcct.title = `claude account: ${name}`;
+      $hAcct.title = `claude account: ${name} · 点查看可用 accounts`;
     }
+  }
+
+  // Tap the account pill → show a quick info modal listing every account
+  // we found under ~/.claude-accounts/, marking the active one. v1 is
+  // read-only; switching at runtime is a TODO so we just educate the
+  // user about how to change it.
+  if ($hAcct) {
+    $hAcct.addEventListener('click', async () => {
+      try {
+        const r = await fetch(`/api/accounts?token=${encodeURIComponent(TOKEN)}`);
+        if (!r.ok) { showToast('account 列表拉失败 HTTP ' + r.status, 'error'); return; }
+        const j = await r.json();
+        const lines = (j.accounts || []).map((a) =>
+          `${a.active ? '●' : '○'} ${a.name}`
+        );
+        const body =
+          'agentphone 检测到以下 claude account（在 ~/.claude-accounts/）：\n\n' +
+          lines.join('\n') +
+          '\n\n● = 当前使用\n○ = 可切换\n\n切换方法（暂时还要重启 server）：\n' +
+          '1. 编辑 ~/.config/agentphone/env\n' +
+          '2. 加一行: CLAUDE_CONFIG_DIR=/home/yzt/.claude-accounts/<name>\n' +
+          '3. systemctl --user restart agentphone\n\n' +
+          '运行时无重启切换 = P1 TODO，做了告诉你';
+        alert(body);
+      } catch (e) {
+        showToast('account 列表拉失败: ' + (e && e.message || e), 'error');
+      }
+    });
+    $hAcct.style.cursor = 'pointer';
   }
 
   // ─── streaming text blocks ────────────────────────────────────
@@ -1538,10 +1567,69 @@
     lastTurnId = null;
     lastRenderedSeq = -1;
     lastHistoryTotal = -1;  // a new session never matches the previous total
-    const e = document.createElement('div');
-    e.className = 'empty'; e.id = 'empty';
-    e.textContent = '新对话';
-    $messages.appendChild(e);
+    renderEmptyEnvCard();
+  }
+
+  // Replaces the bare "新对话" placeholder with a small env card that shows
+  // cwd / account / effort and a few one-tap example prompts. Visible
+  // only when the chat area is empty; first user prompt clears it.
+  function renderEmptyEnvCard() {
+    const wrap = document.createElement('div');
+    wrap.className = 'empty env-card'; wrap.id = 'empty';
+
+    const title = document.createElement('div');
+    title.className = 'env-title';
+    title.textContent = '新对话';
+    wrap.appendChild(title);
+
+    const grid = document.createElement('div');
+    grid.className = 'env-grid';
+    function pair(k, v) {
+      const a = document.createElement('div'); a.className = 'env-k'; a.textContent = k;
+      const b = document.createElement('div'); b.className = 'env-v'; b.textContent = v || '—';
+      grid.appendChild(a); grid.appendChild(b);
+    }
+    const accountStr = (typeof $hAcct !== 'undefined' && $hAcct?.textContent) || '(default)';
+    pair('cwd', currentCwd || defaultCwd || '(unset)');
+    pair('account', accountStr);
+    pair('effort', settings.effort || 'max');
+    pair('auto-approve', settings.autoApproveTools ? '✓ yolo' : '一个个确认');
+    wrap.appendChild(grid);
+
+    const suggHead = document.createElement('div');
+    suggHead.className = 'env-sugg-head';
+    suggHead.textContent = '💡 一些起手 prompt';
+    wrap.appendChild(suggHead);
+
+    const sugg = document.createElement('div');
+    sugg.className = 'env-sugg';
+    const samples = [
+      '读一下 README 和 DESIGN.md, 然后告诉我项目现状',
+      '搜一下当前目录有没有 TODO/FIXME, 列出来',
+      '用 markdown 表格对比 GPT-3 / GPT-4 / GPT-5 的参数量和训练成本',
+      '帮我把上次的报错 trace 一下, 找到 root cause',
+    ];
+    for (const s of samples) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'env-sugg-btn';
+      btn.textContent = s;
+      btn.addEventListener('click', () => {
+        $input.value = s;
+        autoResize();
+        setBusy(busy);  // refresh send button state
+        $input.focus();
+      });
+      sugg.appendChild(btn);
+    }
+    wrap.appendChild(sugg);
+
+    const hint = document.createElement('div');
+    hint.className = 'env-hint';
+    hint.textContent = '☰ session 抽屉 · 🔄 刷新 · max ⚡ 等设置在右上';
+    wrap.appendChild(hint);
+
+    $messages.appendChild(wrap);
   }
 
   function openDrawer() {
