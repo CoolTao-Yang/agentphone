@@ -20,7 +20,7 @@ import type { AgentSettings, ClientMessage, ExternalSessionStatus, ServerMessage
 import { TurnRunner } from './runner.ts';
 import { defaultAgent, externalSessions, ownerOfSession } from './harness/registry.ts';
 import { watchJsonl, jsonlPathFor } from './harness/cmax-external/jsonl-watcher.ts';
-import { appendInjectUserMessage, appendMirrorEntry, mergeFromPhoneSession } from './harness/cmax-external/jsonl-writer.ts';
+import { appendInjectUserMessage, appendMirrorEntry, mergeFromPhoneSession, buildHistoryPrefix } from './harness/cmax-external/jsonl-writer.ts';
 import { findSessionFile } from './harness/claude-sdk/adapter.ts';
 import { linkStore } from './store/links.ts';
 import { sendToAll as sendPushToAll } from './push.ts';
@@ -143,6 +143,14 @@ function createHandler(c: any, cfg: Cfg) {
   // path, accumulated on text_delta events, flushed + reset on turn_done.
   let myCurrentTurnPrompt: string = '';
   let myCurrentTurnAssistantText: string = '';
+  // Fork-with-history one-shot prefix: stashed by the fork_session handler,
+  // prepended to the very next prompt's SDK call, then cleared. mirror keeps
+  // recording the user's actual text — the prefix is just context fed to
+  // the API, not something we want logged into A as a giant mirror block.
+  let myPendingHistoryPrefix: string | null = null;
+  // Auto-link target for the post-fork session. When session_init lands for
+  // this connection's pending runner, we issue linkStore.link(newSid, this).
+  let myPendingForkLinkTo: string | null = null;
 
   const send = (msg: ServerMessage) => { if (ws) ws.send(JSON.stringify(msg)); };
 
@@ -199,6 +207,17 @@ function createHandler(c: any, cfg: Cfg) {
         if (!myCurrentSessionId) {
           myCurrentSessionId = newSid;
           send({ type: 'session_set', sessionId: newSid, cwd: myCurrentCwd, external: externalStatusFor(newSid) });
+        }
+        // fork-with-history follow-up: now that the new session has an id,
+        // commit the auto-link to the source external session and tell the
+        // client so the 📎 badge appears.
+        if (myPendingForkLinkTo) {
+          const target = myPendingForkLinkTo;
+          myPendingForkLinkTo = null;
+          linkStore.link(newSid, target).then(() => {
+            send({ type: 'link_info', phoneSessionId: newSid, externalSessionId: target });
+            console.log(`[ws] auto-linked forked phone ${newSid.slice(0, 8)} → cmax ${target.slice(0, 8)}`);
+          }).catch((e) => console.warn('[ws] auto-link failed:', e?.message));
         }
       }
       switch (emit.kind) {
@@ -518,8 +537,20 @@ function createHandler(c: any, cfg: Cfg) {
           // prior turn that errored.
           myCurrentTurnPrompt = msg.text || '';
           myCurrentTurnAssistantText = '';
+          // Fork-with-history one-shot: if a previous fork_session stashed
+          // an external session's history as a prefix, prepend it now and
+          // clear it. The SDK sees (history + user prompt); the mirror /
+          // myCurrentTurnPrompt records only the user's actual text so A's
+          // jsonl mirror block doesn't double-up the history we already
+          // baked in.
+          let promptForSdk = msg.text || '';
+          if (myPendingHistoryPrefix) {
+            promptForSdk = myPendingHistoryPrefix + promptForSdk;
+            console.log(`[ws] applied fork-with-history prefix (${myPendingHistoryPrefix.length} chars) to first prompt`);
+            myPendingHistoryPrefix = null;
+          }
           r.start({
-            prompt: msg.text,
+            prompt: promptForSdk,
             images: msg.images,
             cwd: myCurrentCwd,
             sessionId: myCurrentSessionId,
@@ -584,6 +615,54 @@ function createHandler(c: any, cfg: Cfg) {
           });
         } catch (err) {
           send({ type: 'error', message: 'link 失败: ' + (err instanceof Error ? err.message : String(err)) });
+        }
+        return;
+      }
+
+      // Fork-with-history: spawn a fresh phone-owned session B that
+      // starts out knowing what A has discussed. We don't actually pre-
+      // populate B's jsonl (the SDK assigns the id and writes the file
+      // itself); instead we stash A's formatted history block on this
+      // connection, prepend it to B's very first prompt, and let claude.exe
+      // process (history + first user prompt) as a single API call. After
+      // that B continues as its own session.
+      if (msg.type === 'fork_session') {
+        try {
+          const ext = externalSessions.get(msg.externalSessionId);
+          if (!ext) {
+            send({ type: 'error', message: '源 cmax session 不在线，无法 fork' });
+            return;
+          }
+          const path = jsonlPathFor(ext.account, ext.cwd, msg.externalSessionId);
+          const prefix = await buildHistoryPrefix(path);
+          if (!prefix) {
+            send({ type: 'error', message: '源 session 的历史为空，没什么可 fork 的' });
+            return;
+          }
+          // Switch this WS connection to a pending runner (new session B).
+          // session_init will assign a real id; we auto-link + apply prefix
+          // on the upcoming prompt path.
+          myCurrentSessionId = null;
+          myCurrentCwd = msg.cwd || ext.cwd;
+          myTakeoverSid = null;
+          myPendingHistoryPrefix = prefix;
+          myPendingForkLinkTo = msg.externalSessionId;
+          if (myExternalWatcherStop) { myExternalWatcherStop(); myExternalWatcherStop = null; }
+          myExtSeq = 0;
+          const newRunner = getRunnerForSession(null);
+          subscribeToRunner(newRunner);
+          send({
+            type: 'session_set',
+            sessionId: null,
+            cwd: myCurrentCwd,
+            external: null,
+          });
+          console.log(
+            `[ws] fork_session: source=${msg.externalSessionId.slice(0, 8)} ` +
+            `prefix_chars=${prefix.length} cwd=${myCurrentCwd}`,
+          );
+        } catch (err) {
+          send({ type: 'error', message: 'fork 失败: ' + (err instanceof Error ? err.message : String(err)) });
         }
         return;
       }

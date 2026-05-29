@@ -188,6 +188,62 @@ async function tailLastEntry(jsonlPath: string): Promise<RawEntry | null> {
 
 export type _MirrorImagesUnused = ImageAttachment;  // satisfy types import lint
 
+// ── Fork-with-history: read external session A's whole jsonl, build a
+// single context block to prepend to B's first user prompt ──────────
+
+const HISTORY_PREFIX_BUDGET_CHARS = 50_000;
+const HISTORY_PER_TURN_TRUNCATE = 3_000;
+
+/**
+ * Read an external (cmax) session's jsonl and turn it into a single
+ * context-establishing block that can be prepended to a freshly-forked
+ * phone session's first prompt. Budget-capped to keep API costs sane —
+ * if A is huge, we keep the LATEST turns and prepend a tag explaining
+ * truncation.
+ */
+export async function buildHistoryPrefix(externalJsonlPath: string): Promise<string> {
+  const turns = await readPhoneTurns(externalJsonlPath);  // same line-walker
+  if (turns.length === 0) {
+    return '';
+  }
+  const rendered: string[] = [];
+  let budget = HISTORY_PREFIX_BUDGET_CHARS;
+  let truncatedTurns = 0;
+  // Walk from the END (most-recent) so when budget runs out we drop
+  // the oldest exchanges first.
+  for (let i = turns.length - 1; i >= 0; i--) {
+    const t = turns[i];
+    const u = truncateTurn(t.userText.trim());
+    const a = truncateTurn(t.assistantText.trim()) || '(no text response)';
+    const block = `── 轮 ${i + 1} ──\n[用户]\n${u}\n\n[助手]\n${a}`;
+    if (block.length > budget) {
+      truncatedTurns = i + 1;
+      break;
+    }
+    rendered.unshift(block);
+    budget -= block.length;
+  }
+  const headerLines: string[] = [
+    `<previous-conversation-context>`,
+    `下面是你和这位用户在桌面 CLI 上的对话历史。`,
+    `请把它当作你们已经达成的共识，自然地接续，无需重新自我介绍或重复已经讲过的内容。`,
+  ];
+  if (truncatedTurns > 0) {
+    headerLines.push(
+      `注：原会话共 ${turns.length} 轮，因 token 预算只保留了最近 ${turns.length - truncatedTurns} 轮。`,
+    );
+  }
+  headerLines.push('');
+  const header = headerLines.join('\n');
+  const body = rendered.join('\n\n');
+  return `${header}${body}\n</previous-conversation-context>\n\n`;
+}
+
+function truncateTurn(s: string): string {
+  if (s.length <= HISTORY_PER_TURN_TRUNCATE) return s;
+  return s.slice(0, HISTORY_PER_TURN_TRUNCATE) + `\n[…${s.length - HISTORY_PER_TURN_TRUNCATE} chars truncated]`;
+}
+
 // ── Merge: B's whole conversation → one user prompt injected into A ──
 
 /**

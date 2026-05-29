@@ -367,11 +367,23 @@
     const forkBtn = b.querySelector('.follow-fork');
     if (forkBtn) {
       forkBtn.addEventListener('click', () => {
-        // Stash the current external sid so once the new session is born we
-        // can call set_link with it.
-        pendingForkLinkTo = currentSessionId;
-        if (typeof openNewSessionModal === 'function') openNewSessionModal();
-        else $newSessionBtn?.click();
+        // Server-side fork-with-history: it reads A's jsonl, stashes the
+        // history block as a prefix to our next prompt, spawns a fresh
+        // pending runner (B), and auto-links B → A on session_init. We
+        // skip the new-session modal entirely — fork-with-history keeps
+        // A's cwd by default, since the whole point is "continue this
+        // conversation".
+        if (!currentSessionId) return;
+        sendWS({ type: 'fork_session', externalSessionId: currentSessionId, cwd: currentCwd });
+        clearMessages();
+        // Local optimistic state: server will echo session_set { sessionId:
+        // null } back; applyFollowMode will hide the external banner.
+        currentSessionId = null;
+        currentExternal = null;
+        applyFollowMode();
+        closeDrawer();
+        showToast('fork 中 · 历史会作为下一条 prompt 的前缀注入', 'ok', 2400);
+        setTimeout(() => { try { $input?.focus(); } catch {} }, 100);
       });
     }
     $bannerRow.appendChild(b);

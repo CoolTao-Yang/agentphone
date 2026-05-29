@@ -41,7 +41,19 @@ export type ClientMessage =
   // jsonl. cmax queues it; user presses Enter to let claude.exe pick up
   // B's context as A's next prompt. One-time merge — repeatable for
   // additional turns but not auto.
-  | { type: 'merge_to_external'; phoneSessionId: string; externalSessionId: string };
+  | { type: 'merge_to_external'; phoneSessionId: string; externalSessionId: string }
+  // Fork-with-history (the right way to "continue this conversation on
+  // phone"): server reads A's jsonl, formats every user/assistant turn
+  // into a system-context block, stashes it as a one-time prefix for
+  // this connection's NEXT prompt. The new phone session B's first SDK
+  // call sees the prefix + the user's actual text, so its claude.exe
+  // starts out knowing what was discussed in A. Subsequent turns continue
+  // naturally with B's own accumulating jsonl.
+  //
+  // cwd defaults to A's cwd if omitted — fork-with-history is "same
+  // conversation, different driver", so different cwd would defeat the
+  // purpose.
+  | { type: 'fork_session'; externalSessionId: string; cwd?: string };
 
 export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
