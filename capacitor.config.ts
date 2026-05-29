@@ -5,11 +5,17 @@ import type { CapacitorConfig } from '@capacitor/cli';
 // across restarts). No more rebuilding the APK every time the host's
 // Tailscale IP shifts.
 //
-// On launch:
-//   1. WebView loads bundled index.html.
-//   2. Inline bootstrap script checks localStorage for the saved URL.
-//   3. If saved → location.replace(<url>/launch).
-//   4. If not → renders a small setup form, saves, then redirects.
+// On launch (v38+ OTA UI):
+//   1. WebView loads bundled index.html (at http://localhost).
+//   2. Inline bootstrap script checks localStorage for saved URL+token.
+//   3. If saved → probe server with a 2.5s timeout, then:
+//        - reachable → location.replace(<url>/launch) so the user gets
+//          the latest server-hosted UI for free (no APK reinstall needed
+//          to pick up the desktop-side static/ changes).
+//        - unreachable → fall back to bundled UI + small "离线模式" toast.
+//   4. If not saved → setup form (manual URL or QR scan), then redirects
+//      to <url>/launch on commit. The server's /launch route attaches the
+//      current token automatically, so token rotation handles itself.
 
 const config: CapacitorConfig = {
   appId: 'com.cooltao.agentphone',

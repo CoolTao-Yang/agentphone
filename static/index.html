@@ -31,11 +31,27 @@
     }
   </script>
 
-  <!-- APK bootstrap: store server URL + token in localStorage and let app.js
-       boot in-place against the configured server. No location.replace, so
-       the WebView never leaves this bundled page — that's what makes it
-       feel like an app instead of a tab pointing at a website. Browser PWA
-       skips this entirely; it gets URL + token from query params. -->
+  <!-- APK bootstrap with OTA (over-the-air UI update):
+       1. First launch (no stored URL/token): show setup form, user enters
+          URL or scans QR, we persist to localStorage.
+       2. Subsequent launches WITH stored config:
+            a. We're booting from bundled HTML (location.host === 'localhost').
+            b. Probe the configured server with 2.5s timeout.
+            c. Reachable → location.replace(<url>/launch) — server's /launch
+               redirects to /?token=<current> so token rotation is handled
+               for free, AND we now run the *server's* (always-latest) UI.
+            d. Unreachable → fall back to the bundled HTML so the app is
+               usable offline / when desktop is asleep, with a small toast.
+       3. After the redirect, the same script runs on the server-hosted
+          index.html. We detect we're no longer on bundled (host !==
+          localhost) and skip the probe (otherwise infinite loop).
+
+       This is what lets desktop-side UI fixes reach APK users without
+       reinstalling: every launch picks up whatever I last pushed to
+       static/. Browser PWA users were already fine via Service Worker.
+
+       Browser PWA skips this entirely; it gets URL + token from query
+       params and the SW handles freshness. -->
   <script>
   (function () {
     var inCapacitor = !!(window.Capacitor || window.cordova);
@@ -43,8 +59,12 @@
     var TOKEN_KEY = 'agentphone:token';
     if (!inCapacitor) return;
 
-    // Parse a pasted/scanned full URL (with optional ?token=) into a clean
-    // base + token pair. Returns null on garbage input.
+    // Capacitor android with `androidScheme: 'http'` hosts bundled HTML at
+    // http://localhost — that's how we know we haven't been redirected to
+    // the user's server yet. Any other host = we're already on the server's
+    // hosted UI (after OTA redirect), so skip the probe entirely.
+    var onBundled = location.host === 'localhost' || location.protocol === 'file:' || location.protocol === 'capacitor:';
+
     function parseConfigUrl(raw) {
       var v = String(raw || '').trim();
       if (!v) return null;
@@ -60,23 +80,88 @@
     function showApp() {
       var bs = document.getElementById('bootstrap');
       var app = document.getElementById('app');
+      var sp = document.getElementById('ota-splash');
       if (bs) bs.style.display = 'none';
       if (app) app.style.display = '';
-      // Signal app.js to (re)boot now that config is in place.
+      if (sp) sp.style.display = 'none';
       window.dispatchEvent(new CustomEvent('agentphone-config-ready'));
     }
     function showBootstrap() {
       var bs = document.getElementById('bootstrap');
       var app = document.getElementById('app');
+      var sp = document.getElementById('ota-splash');
       if (bs) bs.style.display = 'block';
+      if (app) app.style.display = 'none';
+      if (sp) sp.style.display = 'none';
+    }
+    function showSplash(msg) {
+      var sp = document.getElementById('ota-splash');
+      var bs = document.getElementById('bootstrap');
+      var app = document.getElementById('app');
+      if (sp) {
+        sp.style.display = 'flex';
+        var t = sp.querySelector('.ota-msg');
+        if (t && msg) t.textContent = msg;
+      }
+      if (bs) bs.style.display = 'none';
       if (app) app.style.display = 'none';
     }
 
-    // If we already have a stored config, surface the app immediately.
+    // Probe a tiny ungated static file; if it answers, the server is alive
+    // and we can hand control over to its index.html for fresh UI.
+    function probeServer(base) {
+      return new Promise(function (resolve) {
+        var ctrl;
+        try { ctrl = new AbortController(); } catch (e) { ctrl = null; }
+        var to = setTimeout(function () {
+          if (ctrl) try { ctrl.abort(); } catch (e) {}
+          resolve(false);
+        }, 2500);
+        var fetchOpts = { method: 'GET', cache: 'no-store' };
+        if (ctrl) fetchOpts.signal = ctrl.signal;
+        fetch(base + '/icon.svg?_=' + Date.now(), fetchOpts)
+          .then(function (r) { clearTimeout(to); resolve(!!(r && r.ok)); })
+          .catch(function () { clearTimeout(to); resolve(false); });
+      });
+    }
+
+    function offlineToast(msg) {
+      // Tiny fixed toast at the top of bundled fallback so the user knows
+      // why they're not on the latest UI. Vanishes after 4s.
+      var t = document.createElement('div');
+      t.textContent = msg;
+      t.style.cssText = 'position:fixed;top:10px;left:50%;transform:translateX(-50%);' +
+        'background:rgba(250,204,21,0.18);color:#facc15;font-family:monospace;' +
+        'font-size:12px;padding:6px 12px;border:1px solid rgba(250,204,21,0.4);' +
+        'border-radius:6px;z-index:9999;max-width:90vw;text-align:center;';
+      document.body.appendChild(t);
+      setTimeout(function () { try { t.remove(); } catch (e) {} }, 4000);
+    }
+
     var storedUrl = localStorage.getItem(URL_KEY);
     var storedTok = localStorage.getItem(TOKEN_KEY);
     document.addEventListener('DOMContentLoaded', function () {
-      if (storedUrl && storedTok) { showApp(); return; }
+      // CASE A: we're already on the server (post-OTA redirect). Just run
+      // the app normally; localStorage values stay as-is.
+      if (!onBundled) { showApp(); return; }
+
+      // CASE B: bundled HTML + stored config → try OTA, fall back to bundled.
+      if (storedUrl && storedTok) {
+        showSplash('拉取最新 UI…');
+        probeServer(storedUrl).then(function (alive) {
+          if (alive) {
+            // Server's /launch re-attaches the current token, so a rotated
+            // token (env regen, etc) gets picked up automatically.
+            location.replace(storedUrl + '/launch');
+          } else {
+            showApp();
+            offlineToast('离线模式 · 用本地 UI · server 不可达');
+          }
+        });
+        return;
+      }
+
+      // CASE C: first-launch setup form.
       showBootstrap();
 
       var input = document.getElementById('bs-url');
@@ -92,7 +177,11 @@
           localStorage.setItem(URL_KEY, p.base);
           localStorage.setItem(TOKEN_KEY, p.token);
         } catch (e) {}
-        showApp();
+        // First setup: go straight to server-hosted UI (it'll be reachable
+        // since the user just typed the URL). Skips the probe — they just
+        // told us where it is, no need to second-guess.
+        showSplash('连接中…');
+        location.replace(p.base + '/launch');
       }
       if (go) go.addEventListener('click', function () {
         commit(input && input.value);
@@ -100,8 +189,6 @@
       if (input) input.addEventListener('keydown', function (e) {
         if (e.key === 'Enter' && go) go.click();
       });
-      // The QR scanner stuffs the parsed URL back into #bs-url then clicks
-      // #bs-go — same code path as a manual paste.
     });
   })();
   </script>
@@ -207,6 +294,15 @@
     }
   })();
   </script>
+
+  <!-- OTA splash: shown briefly while we probe the user's server and decide
+       whether to serve bundled or hand off to remote. Hidden by default; the
+       bootstrap script flips it on for ~0.1-2.5s during the probe. -->
+  <section id="ota-splash" class="ota-splash" style="display:none">
+    <div class="ota-logo">agent<span style="opacity:.7">phone</span></div>
+    <div class="ota-spin"></div>
+    <div class="ota-msg">拉取最新 UI…</div>
+  </section>
 
   <div id="app">
     <header>
