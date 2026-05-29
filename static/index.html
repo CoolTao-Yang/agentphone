@@ -140,10 +140,40 @@
 
     var storedUrl = localStorage.getItem(URL_KEY);
     var storedTok = localStorage.getItem(TOKEN_KEY);
+
+    // Read the bundled APK's build-info.json (written by GH Actions before
+    // `cap sync`). Stash into localStorage so app.js — which runs on the
+    // *server*-hosted page after OTA redirect — can compare against the
+    // server's /api/apk-info and surface an "🆕 build #N 可用" banner.
+    // The bundled file is only present on builds CI created, so a missing
+    // file (dev npx cap run / manual install) is fine — just no banner.
+    function loadBundledBuildInfo() {
+      try {
+        return fetch('./build-info.json?_=' + Date.now(), { cache: 'no-store' })
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (info) {
+            if (!info) return;
+            try {
+              if (info.runNumber != null) {
+                localStorage.setItem('agentphone:apkBuildNumber', String(info.runNumber));
+              }
+              if (info.shortSha) localStorage.setItem('agentphone:apkBuildSha', String(info.shortSha));
+              if (info.builtAt)  localStorage.setItem('agentphone:apkBuiltAt', String(info.builtAt));
+            } catch (e) {}
+          })
+          .catch(function () {});
+      } catch (e) { return Promise.resolve(); }
+    }
+
     document.addEventListener('DOMContentLoaded', function () {
       // CASE A: we're already on the server (post-OTA redirect). Just run
       // the app normally; localStorage values stay as-is.
       if (!onBundled) { showApp(); return; }
+
+      // We're on the bundled HTML — refresh apk build info into localStorage
+      // before any OTA decision. Best-effort: the probe doesn't wait on this
+      // (it's a fire-and-forget fetch of a tiny static file).
+      loadBundledBuildInfo();
 
       // CASE B: bundled HTML + stored config → try OTA, fall back to bundled.
       if (storedUrl && storedTok) {

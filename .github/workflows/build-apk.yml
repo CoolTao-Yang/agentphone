@@ -39,6 +39,24 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
+      - name: Stamp build-info.json into static/
+        # Gets copied into APK assets by `cap sync` below. The bundled
+        # bootstrap reads it at first launch and stores into localStorage,
+        # so app.js can later compare against /api/apk-info to surface an
+        # in-app "🆕 build #N 可用" banner — no GitHub Actions tab needed.
+        run: |
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          BUILT_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          cat > static/build-info.json <<EOF
+          {
+            "runNumber": ${{ github.run_number }},
+            "sha": "${{ github.sha }}",
+            "shortSha": "$SHORT_SHA",
+            "builtAt": "$BUILT_AT"
+          }
+          EOF
+          cat static/build-info.json
+
       - name: Sync Capacitor (copy static/ → android assets)
         env:
           AGENTPHONE_SERVER_URL: ${{ github.event.inputs.server_url }}

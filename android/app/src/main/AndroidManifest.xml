@@ -38,4 +38,23 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Voice input (capacitor-community/speech-recognition).
+         RECORD_AUDIO is what Android prompts for; the package query lets
+         the plugin discover any installed speech recognition service. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Allow in-app APK installer to launch the system package installer. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <!-- Android 11+ package visibility: needed so the speech-recognition
+         plugin can see Google's RecognitionService, and so the install-APK
+         intent can resolve a viewer for application/vnd.android.package-archive. -->
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="application/vnd.android.package-archive" />
+        </intent>
+    </queries>
 </manifest>

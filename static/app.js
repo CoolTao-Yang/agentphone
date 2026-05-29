@@ -1975,11 +1975,85 @@
   }
 
   // ─── voice STT ────────────────────────────────────────────────
-  let recog = null;
+  // Two backends, picked at init:
+  //   * Native (@capacitor-community/speech-recognition) — preferred when
+  //     running in the Capacitor APK. Uses Android's RecognitionService
+  //     directly, bypassing the Web Speech API's secure-context
+  //     requirement. This is what makes voice work after the OTA redirect
+  //     to http://<tailscale-ip>:8765 (which is *not* a secure origin).
+  //   * Web (webkitSpeechRecognition) — fallback for browser PWA on HTTPS
+  //     / localhost. Same behavior as before; v39 and earlier shipped only
+  //     this path.
   let recogActive = false;
   let baseText = '';
+  // Abstraction: { kind, start(), stop() } so the caller (startSTT and the
+  // mic-button handler) stay unaware of which backend is live.
+  let stt = null;
 
-  function initSTT() {
+  async function initSTT() {
+    // Native path: only available inside the Capacitor APK with the plugin
+    // wired in via `npx cap sync`. capacitor.plugins.json (auto-generated)
+    // registers the JS proxy at window.Capacitor.Plugins.SpeechRecognition.
+    const capPlugin =
+      window.Capacitor && window.Capacitor.Plugins &&
+      window.Capacitor.Plugins.SpeechRecognition || null;
+    if (capPlugin) {
+      try {
+        const av = await capPlugin.available();
+        if (av && av.available) {
+          capPlugin.addListener('partialResults', (data) => {
+            const text = (data && data.matches && data.matches[0]) || '';
+            if (!text) return;
+            const sep = baseText && !/\s$/.test(baseText) ? ' ' : '';
+            $input.value = baseText + sep + text;
+            autoResize();
+          });
+          capPlugin.addListener('listeningState', (data) => {
+            if (!data) return;
+            if (data.status === 'stopped') {
+              recogActive = false;
+              $mic.setAttribute('aria-pressed', 'false');
+              log('info', 'STT (native) end');
+            } else if (data.status === 'started') {
+              recogActive = true;
+              $mic.setAttribute('aria-pressed', 'true');
+              log('ok', 'STT (native) start (lang=zh-CN)');
+            }
+          });
+          stt = {
+            kind: 'native',
+            async start() {
+              const perm = await capPlugin.checkPermissions();
+              const cur = perm && perm.speechRecognition;
+              if (cur !== 'granted') {
+                const req = await capPlugin.requestPermissions();
+                if (!req || req.speechRecognition !== 'granted') {
+                  showToast('麦克风权限被拒', 'error', 3500);
+                  return;
+                }
+              }
+              baseText = $input.value;
+              // popup:false → no system dialog, partial results stream in.
+              await capPlugin.start({
+                language: 'zh-CN',
+                maxResults: 1,
+                partialResults: true,
+                popup: false,
+              });
+            },
+            async stop() {
+              try { await capPlugin.stop(); } catch {}
+            },
+          };
+          log('info', 'STT: using native Capacitor plugin');
+          return;
+        }
+      } catch (e) {
+        log('warn', 'STT: native plugin probe failed, falling back to web: ' + (e && e.message || e));
+      }
+    }
+
+    // Web fallback (browser PWA / dev).
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) {
       log('warn', 'SpeechRecognition unavailable');
@@ -1991,10 +2065,7 @@
       log('warn', 'non-secure context — SR may fail');
       // don't disable; let user discover and we'll show clear toast
     }
-    recog = new SR();
-    // Default to zh-CN. Browser UI language is unrelated to what the user
-    // speaks (most users here have English Chrome UI but talk Chinese).
-    // We can expose a toggle later.
+    const recog = new SR();
     recog.lang = 'zh-CN';
     recog.interimResults = true;
     recog.continuous = false;
@@ -2004,7 +2075,7 @@
       recogActive = true;
       $mic.setAttribute('aria-pressed', 'true');
       baseText = $input.value;
-      log('ok', 'STT start (lang=' + recog.lang + ')');
+      log('ok', 'STT (web) start (lang=' + recog.lang + ')');
     };
     recog.onresult = (ev) => {
       let interim = '', finalT = '';
@@ -2023,12 +2094,10 @@
       const err = ev.error || 'unknown';
       log('error', `STT err: ${err} (secure=${window.isSecureContext})`);
       if (err === 'no-speech') return; // common, don't toast
-      // On Android Chrome 94+ the Web Speech API silently fails (often as
-      // 'aborted' immediately after start) when the page isn't a secure
-      // context. We surface a single actionable hint in that case.
       if (!window.isSecureContext && (err === 'aborted' || err === 'not-allowed' || err === 'service-not-allowed')) {
+        // The native APK path bypasses this entirely — point users there.
         showToast(
-          '语音需要 HTTPS。Windows PowerShell 跑：tailscale serve --bg https / http://localhost:8765，然后用它给的 .ts.net URL',
+          '语音需要 native APK（绕过 HTTPS 限制）：/api/download-apk',
           'error', 9000
         );
         return;
@@ -2050,19 +2119,31 @@
     recog.onend = () => {
       recogActive = false;
       $mic.setAttribute('aria-pressed', 'false');
-      log('info', 'STT end');
+      log('info', 'STT (web) end');
     };
+    stt = {
+      kind: 'web',
+      start() {
+        // CRITICAL: no async gap before recog.start() — Chrome treats it as
+        // breaking the user-gesture chain and aborts within 1 RAF.
+        recog.start();
+      },
+      stop() { recog.stop(); },
+    };
+    log('info', 'STT: using Web Speech API');
   }
 
   function startSTT() {
-    if (!recog) { showToast('此设备不支持语音识别', 'error'); return; }
-    if (recogActive) { recog.stop(); return; }
-    // CRITICAL: don't await anything before recog.start() — Chrome treats
-    // an async gap as breaking the user-gesture chain and the recognition
-    // aborts within 1 RAF. The permission query we used to do here was
-    // the cause of the immediate 'aborted' error.
+    if (!stt) { showToast('此设备不支持语音识别', 'error'); return; }
+    if (recogActive) { Promise.resolve(stt.stop()).catch(() => {}); return; }
     try {
-      recog.start();
+      const p = stt.start();
+      if (p && typeof p.then === 'function') {
+        p.catch((e) => {
+          log('error', 'STT start fail: ' + (e && e.message || e));
+          showToast('语音启动失败: ' + (e && e.message || e), 'error', 4000);
+        });
+      }
     } catch (e) {
       log('error', 'STT start fail: ' + (e && e.message || e));
       showToast('语音启动失败: ' + (e && e.message || e), 'error', 4000);
@@ -2194,6 +2275,10 @@
   function maybeShowHttpsBanner() {
     if (window.isSecureContext) return;
     if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') return;
+    // In native Capacitor APK voice goes through the native plugin (no
+    // secure-context requirement), so the HTTPS hint becomes misleading.
+    // Suppress it entirely. Browser PWAs still get the warning.
+    if (inCapacitor()) return;
     // Compact single-line summary; full instructions hide behind a tap. Keeps
     // the banner from eating ~1/8 of the screen on a 420px-wide phone.
     addBanner('warn',
@@ -2206,9 +2291,67 @@
           'host (Windows) 上跑：<br>' +
           '<code>tailscale serve --bg https / http://localhost:8765</code><br>' +
           '然后用它给的 <code>https://*.ts.net</code> URL 换掉书签即可。' +
+          '<br>或者装 native APK: <code>/api/download-apk</code> — 原生语音不需要 HTTPS。' +
         '</div>' +
       '</details>'
     );
+  }
+
+  // ─── in-app APK update check ─────────────────────────────────────
+  // Only meaningful in Capacitor APK. The bundled bootstrap (index.html)
+  // populated localStorage['agentphone:apkBuildNumber'] from the build-info
+  // JSON CI stamped into the APK; we compare against /api/apk-info (the
+  // server-side latest successful CI run) to detect newer builds.
+  //
+  // Render is a small info banner with [更新] / [✕]. Tapping update kicks
+  // off `location.href = /api/download-apk`, which the Android WebView
+  // routes through DownloadManager — the user gets a notification, taps
+  // it, the package installer opens. After install + relaunch the new
+  // bundled HTML's bootstrap will re-stamp localStorage with the new run #
+  // and the banner will quietly stop appearing.
+  let apkUpdateBannerShown = false;
+  async function maybeShowApkUpdateBanner() {
+    if (!inCapacitor()) return;
+    if (apkUpdateBannerShown) return;
+    const myBuildRaw = localStorage.getItem('agentphone:apkBuildNumber') || '';
+    const myBuild = parseInt(myBuildRaw, 10);
+    if (!Number.isFinite(myBuild) || myBuild <= 0) {
+      log('info', 'apk update check: no bundled build-info (manual install?), skipping');
+      return;
+    }
+    try {
+      const r = await fetch(api('/api/apk-info'), { cache: 'no-store' });
+      if (!r.ok) {
+        log('warn', `apk update check: /api/apk-info HTTP ${r.status}`);
+        return;
+      }
+      const remote = await r.json();
+      if (!remote || !Number.isFinite(remote.runNumber)) return;
+      if (remote.runNumber <= myBuild) {
+        log('info', `apk update check: up-to-date (#${myBuild} == latest #${remote.runNumber})`);
+        return;
+      }
+      const sizeMB = remote.sizeMB != null ? remote.sizeMB.toFixed(1) : '?';
+      const commit = (remote.commitMessage || '').slice(0, 40);
+      const html =
+        `<span class="b-msg">🆕 新版 APK <code>#${remote.runNumber}</code> · ${sizeMB}MB · ${commit}</span>` +
+        `<button type="button" class="banner-act primary apk-update-go">更新</button>`;
+      addBanner('info', html);
+      apkUpdateBannerShown = true;
+      const btn = $bannerRow && $bannerRow.querySelector('.apk-update-go');
+      if (btn) btn.addEventListener('click', () => {
+        // Navigating the same WebView triggers Android's DownloadListener
+        // because the server replies with
+        //   Content-Disposition: attachment; filename="..."
+        //   Content-Type: application/vnd.android.package-archive
+        // → DownloadManager → notification → user taps → package installer.
+        showToast('开始下载 · 完成后点通知安装', 'ok', 4000);
+        window.location.href = api('/api/download-apk');
+      });
+      log('ok', `apk update available: #${myBuild} → #${remote.runNumber}`);
+    } catch (e) {
+      log('warn', 'apk update check failed: ' + (e && e.message || e));
+    }
   }
   function maybeAskNotifyPermission() {
     if (!('Notification' in window)) return;
@@ -2426,6 +2569,8 @@
     maybeAskNotifyPermission();
     initSTT();
     connect();
+    // Fire-and-forget; banner appears within a few hundred ms when relevant.
+    setTimeout(() => { maybeShowApkUpdateBanner().catch(() => {}); }, 500);
   }
   // Capacitor: bootstrap script fires this once URL + token are stored.
   window.addEventListener('agentphone-config-ready', () => {
