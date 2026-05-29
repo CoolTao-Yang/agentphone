@@ -12,7 +12,27 @@ import { mountSessionApi } from './sessions.ts';
 import { externalSessions } from './harness/registry.ts';
 import { pushStore } from './store/push.ts';
 import { vapidPublicKey } from './push.ts';
+import { getLatestApk, getCachedApkInfo, hasGhToken } from './apk-download.ts';
+import { EnvHttpProxyAgent, setGlobalDispatcher } from 'undici';
 import QRCode from 'qrcode';
+
+// Corp networks (ByteDance WSL behind Clash) reach api.github.com only
+// via Clash on 127.0.0.1:7897. Node 24's built-in fetch (undici) ignores
+// HTTPS_PROXY env on its own — we have to wire a dispatcher in.
+//
+// EnvHttpProxyAgent (undici ≥6.10) reads HTTPS_PROXY / HTTP_PROXY /
+// NO_PROXY at request time. NO_PROXY in our env covers localhost / 10.x
+// / 172.x / 192.168.x so local-only traffic (push to localhost, future
+// internal callbacks) bypasses the proxy automatically.
+//
+// Opt-in by design: dev machines without the env vars run direct.
+{
+  const proxyUrl = process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy;
+  if (proxyUrl) {
+    setGlobalDispatcher(new EnvHttpProxyAgent());
+    console.log(`🌐  outbound HTTPS via proxy: ${proxyUrl} (NO_PROXY honored)`);
+  }
+}
 
 // Token resolution order:
 //   1. PHONE_AGENT_TOKEN env var (caller overrides everything)
@@ -331,6 +351,59 @@ app.get('/api/launch-qr', async (c) => {
 // your tailnet) is trusted enough to receive the token.
 app.get('/launch', (c) => c.redirect(`/?token=${encodeURIComponent(TOKEN)}`, 302));
 
+// ── APK self-distribution ─────────────────────────────────────────
+// /api/apk-info: JSON metadata for the latest successful build.
+// /api/download-apk: streams the actual .apk binary.
+//
+// Public on purpose — anyone on the tailnet can install. The first-run
+// bootstrap UI also surfaces /api/download-apk so even a brand-new
+// phone (no APK installed yet) can grab one by browsing the server's
+// `/?token=` link from any browser, hitting "下载 APK", and installing.
+app.get('/api/apk-info', async (c) => {
+  if (!hasGhToken()) {
+    return c.json({
+      error: 'GH token 缺失 — 服务端找不到 ~/.config/gh/hosts.yml, 也没有 GH_TOKEN 环境变量',
+    }, 503);
+  }
+  try {
+    const info = await getLatestApk();
+    return c.json({
+      runNumber: info.runNumber,
+      sha: info.shortSha,
+      commitMessage: info.commitMessage,
+      builtAt: info.builtAt,
+      sizeMB: +(info.size / 1024 / 1024).toFixed(2),
+      downloadUrl: '/api/download-apk',
+    });
+  } catch (e: any) {
+    return c.json({ error: e?.message || 'failed to fetch APK info' }, 502);
+  }
+});
+
+app.get('/api/download-apk', async (c) => {
+  if (!hasGhToken()) {
+    return c.text(
+      'GH token 缺失. 服务端启动用户跑一下 `gh auth login` 或 export GH_TOKEN=...',
+      503,
+    );
+  }
+  try {
+    const info = await getLatestApk();
+    // The APK is small (~10-20MB) so loading into memory is fine and
+    // gives Hono an honest Content-Length out of the box.
+    const buf = readFileSync(info.apkPath);
+    const filename = `agentphone-${info.shortSha}.apk`;
+    c.header('Content-Type', 'application/vnd.android.package-archive');
+    c.header('Content-Disposition', `attachment; filename="${filename}"`);
+    c.header('Content-Length', String(buf.length));
+    c.header('X-Agentphone-Run', String(info.runNumber));
+    c.header('X-Agentphone-Sha', info.shortSha);
+    return c.body(buf);
+  } catch (e: any) {
+    return c.text('APK download failed: ' + (e?.message || e), 502);
+  }
+});
+
 app.use('/*', serveStatic({ root: './static' }));
 
 const server = serve({ fetch: app.fetch, port: PORT, hostname: HOST }, (info) => {
@@ -371,6 +444,23 @@ const server = serve({ fetch: app.fetch, port: PORT, hostname: HOST }, (info) =>
   console.log('First-time / shareable direct link:');
   for (const ip of ips) console.log(`   http://${ip}:${info.port}/?token=${TOKEN}`);
   console.log('');
+  // APK self-distribution. Print a direct download URL so the user can
+  // browse to it from any phone browser and install without going to
+  // github.com/CoolTao-Yang/agentphone/actions. Don't crash if GH token
+  // isn't available — just hide the line.
+  if (hasGhToken()) {
+    console.log('📦  Install / update the APK (auto-fetches latest CI build):');
+    for (const ip of ips) console.log(`   http://${ip}:${info.port}/api/download-apk`);
+    console.log('');
+    // Warm the cache in the background so the first hit is instant. Errors
+    // are surfaced when the endpoint is actually called, not here.
+    getLatestApk()
+      .then((apk) => console.log(`📦  cached APK: build #${apk.runNumber} · ${apk.shortSha} · ${(apk.size / 1024 / 1024).toFixed(1)}MB`))
+      .catch((e) => console.warn(`📦  APK cache warm failed: ${e?.message || e}`));
+  } else {
+    console.log('📦  APK auto-distribution disabled — run `gh auth login` to enable /api/download-apk');
+    console.log('');
+  }
   // Phone-scannable QR. v33 was just the /launch URL — APKs that scanned
   // it still needed a separate manual token entry because /launch's job
   // was to 302 with the token. With the no-redirect rework the APK
