@@ -93,6 +93,34 @@ if (!CLAUDE_CONFIG_DIR) {
 const app = new Hono();
 const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
 
+// CORS for cross-origin REST. The APK loads its bundled index.html at
+// http://localhost (Capacitor's default scheme), then hits this server at
+// e.g. http://100.119.115.75:8765. Without permissive CORS, browsers
+// (incl. WebView) block all those /api/* fetches. Token in the query
+// string is the actual auth, so origin isn't a meaningful security
+// boundary here — we mirror back whatever Origin came in. WebSocket
+// handshake doesn't use CORS the same way and is fine.
+app.use('/api/*', async (c, next) => {
+  const origin = c.req.header('origin') || '*';
+  await next();
+  c.res.headers.set('Access-Control-Allow-Origin', origin);
+  c.res.headers.set('Vary', 'Origin');
+  c.res.headers.set('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,PATCH,OPTIONS');
+  c.res.headers.set('Access-Control-Allow-Headers', 'Content-Type,Authorization,x-token');
+});
+app.options('/api/*', (c) => {
+  const origin = c.req.header('origin') || '*';
+  return new Response(null, {
+    headers: {
+      'Access-Control-Allow-Origin': origin,
+      'Vary': 'Origin',
+      'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,PATCH,OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type,Authorization,x-token',
+      'Access-Control-Max-Age': '86400',
+    },
+  });
+});
+
 // #13: simple per-IP rate limit on REST + WS handshake. Bypassed for the
 // static file path because we want PWA loads to be instant.
 const rlBuckets = new Map<string, { count: number; resetAt: number }>();
@@ -343,15 +371,31 @@ const server = serve({ fetch: app.fetch, port: PORT, hostname: HOST }, (info) =>
   console.log('First-time / shareable direct link:');
   for (const ip of ips) console.log(`   http://${ip}:${info.port}/?token=${TOKEN}`);
   console.log('');
-  // Phone-scannable QR for the first launch URL (asciified so it shows up
-  // in the systemd journal too). Skips when tsIPs is empty.
+  // Phone-scannable QR. v33 was just the /launch URL — APKs that scanned
+  // it still needed a separate manual token entry because /launch's job
+  // was to 302 with the token. With the no-redirect rework the APK
+  // bundles its own UI and just needs (baseURL, token) to start talking
+  // to us, so encode BOTH in one shot:
+  //     http://<ip>:8765/?token=<TOKEN>
+  // Scanning that lets the APK auto-fill BOTH config values in one tap.
+  //
+  // Also drop a PNG copy to /tmp so users can `xdg-open /tmp/agentphone-qr.png`
+  // (or pull it across `scp`) if they can't easily read the systemd journal.
   if (tsIPs.length > 0) {
-    const primary = `http://${tsIPs[0]}:${info.port}/launch`;
+    const primary = `http://${tsIPs[0]}:${info.port}/?token=${TOKEN}`;
+    const pngPath = '/tmp/agentphone-qr.png';
     QRCode.toString(primary, { type: 'terminal', small: true }, (err, qr) => {
-      if (err) return;
-      console.log('📱 phone QR (Chrome / APK 内 "扫码 自动填" 都能识别):');
+      if (err) {
+        console.log('═══════════════════════════════════════════════════');
+        return;
+      }
+      console.log(`📱 phone QR — APK 内 "📷 扫码" 一键填好 (URL + token):`);
       console.log(qr.split('\n').map((l) => '  ' + l).join('\n'));
+      console.log(`    QR PNG also at ${pngPath}`);
       console.log('═══════════════════════════════════════════════════');
+    });
+    QRCode.toFile(pngPath, primary, { width: 480, margin: 2 }).catch(() => {
+      /* ignore PNG write failures — terminal QR is the primary surface */
     });
   } else {
     console.log('═══════════════════════════════════════════════════');

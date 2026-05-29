@@ -31,39 +31,77 @@
     }
   </script>
 
-  <!-- APK bootstrap: in Capacitor, redirect to user-configured server URL
-       (or show setup form on first launch). Browser PWA falls through. -->
+  <!-- APK bootstrap: store server URL + token in localStorage and let app.js
+       boot in-place against the configured server. No location.replace, so
+       the WebView never leaves this bundled page — that's what makes it
+       feel like an app instead of a tab pointing at a website. Browser PWA
+       skips this entirely; it gets URL + token from query params. -->
   <script>
   (function () {
-    // Capacitor sets window.Capacitor; cordova sets window.cordova.
     var inCapacitor = !!(window.Capacitor || window.cordova);
-    var KEY = 'agentphone:serverUrl';
+    var URL_KEY = 'agentphone:serverUrl';
+    var TOKEN_KEY = 'agentphone:token';
     if (!inCapacitor) return;
-    var stored = localStorage.getItem(KEY);
-    if (stored) {
-      var u = String(stored).replace(/\/+$/, '');
-      location.replace(u + '/launch');
-      return;
+
+    // Parse a pasted/scanned full URL (with optional ?token=) into a clean
+    // base + token pair. Returns null on garbage input.
+    function parseConfigUrl(raw) {
+      var v = String(raw || '').trim();
+      if (!v) return null;
+      if (!/^https?:\/\//i.test(v)) v = 'http://' + v;
+      try {
+        var u = new URL(v);
+        var token = u.searchParams.get('token') || '';
+        var base = u.origin;
+        return { base: base, token: token };
+      } catch (e) { return null; }
     }
-    // Hide main app and show bootstrap form once DOM is ready.
-    document.addEventListener('DOMContentLoaded', function () {
+
+    function showApp() {
+      var bs = document.getElementById('bootstrap');
+      var app = document.getElementById('app');
+      if (bs) bs.style.display = 'none';
+      if (app) app.style.display = '';
+      // Signal app.js to (re)boot now that config is in place.
+      window.dispatchEvent(new CustomEvent('agentphone-config-ready'));
+    }
+    function showBootstrap() {
       var bs = document.getElementById('bootstrap');
       var app = document.getElementById('app');
       if (bs) bs.style.display = 'block';
       if (app) app.style.display = 'none';
+    }
+
+    // If we already have a stored config, surface the app immediately.
+    var storedUrl = localStorage.getItem(URL_KEY);
+    var storedTok = localStorage.getItem(TOKEN_KEY);
+    document.addEventListener('DOMContentLoaded', function () {
+      if (storedUrl && storedTok) { showApp(); return; }
+      showBootstrap();
+
       var input = document.getElementById('bs-url');
       var go = document.getElementById('bs-go');
+      function commit(raw) {
+        var p = parseConfigUrl(raw);
+        if (!p || !p.base) { alert('URL 无效'); return; }
+        if (!p.token) {
+          alert('URL 里没带 ?token=… — 请扫桌面 CLI 启动时打印的 QR (含 token)');
+          return;
+        }
+        try {
+          localStorage.setItem(URL_KEY, p.base);
+          localStorage.setItem(TOKEN_KEY, p.token);
+        } catch (e) {}
+        showApp();
+      }
       if (go) go.addEventListener('click', function () {
-        var v = (input && input.value || '').trim();
-        if (!v) { return; }
-        if (!/^https?:\/\//i.test(v)) v = 'http://' + v;
-        v = v.replace(/\/+$/, '');
-        try { localStorage.setItem(KEY, v); } catch (e) {}
-        location.replace(v + '/launch');
+        commit(input && input.value);
       });
       if (input) input.addEventListener('keydown', function (e) {
         if (e.key === 'Enter' && go) go.click();
       });
+      // The QR scanner stuffs the parsed URL back into #bs-url then clicks
+      // #bs-go — same code path as a manual paste.
     });
   })();
   </script>
@@ -159,15 +197,12 @@
       if (!code) return;
       var text = String(code.data || '').trim();
       if (!text) return;
-      // The server-side QR encodes `http://<ip>:8765/launch`. We want just
-      // the origin (no /launch path) in the input so the existing connect
-      // handler can append /launch itself.
-      var url = text.replace(/\/launch\b.*$/, '').replace(/\/+$/, '');
-      urlInput.value = url;
+      // Server QR encodes `http://<ip>:8765/?token=<TOKEN>`. The commit()
+      // handler will URL.parse it, peel off the token, and store both
+      // pieces — so just drop the raw scanned text into the input.
+      urlInput.value = text;
       stopCam();
-      // small feedback
       try { goBtn.focus(); } catch (e) {}
-      // auto-connect for convenience
       setTimeout(function () { goBtn.click(); }, 200);
     }
   })();

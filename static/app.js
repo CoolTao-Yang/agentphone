@@ -12,12 +12,53 @@
 (() => {
   'use strict';
 
-  // ─── token & URL ──────────────────────────────────────────────
-  const URL_PARAMS = new URL(location.href).searchParams;
-  const TOKEN = URL_PARAMS.get('token') || '';
-  const WS_PROTO = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  // ─── token & server base ──────────────────────────────────────
+  // Two deployment shapes:
+  //   * Browser PWA — index.html served by the user's server, ?token=… in
+  //     URL, everything is same-origin so a relative '/api/...' works.
+  //   * Capacitor APK — bundled index.html at http://localhost, server URL
+  //     and token come from localStorage (set by the bootstrap form or QR
+  //     scan in index.html). All fetch / WS calls then need an absolute
+  //     base URL pointing at the user's server.
+  //
+  // getServerBase() returns '' for browser PWA (relative) and the absolute
+  // origin like 'http://100.119.115.75:8765' for Capacitor.
+  function inCapacitor() { return !!(window.Capacitor || window.cordova); }
+  function getServerBase() {
+    if (inCapacitor()) {
+      const v = localStorage.getItem('agentphone:serverUrl') || '';
+      return v.replace(/\/+$/, '');
+    }
+    return '';  // same-origin in browser PWA
+  }
+  function getToken() {
+    if (inCapacitor()) {
+      return localStorage.getItem('agentphone:token') || '';
+    }
+    return new URL(location.href).searchParams.get('token') || '';
+  }
+  // TOKEN is captured ONCE at boot so we don't re-read localStorage on every
+  // request, but it's recomputed if the bootstrap config completes after
+  // initial load (see the agentphone-config-ready event below).
+  let TOKEN = getToken();
+  // api('/api/foo') yields the full URL for fetch().
+  function api(path) {
+    return getServerBase() + path;
+  }
   function buildWsUrl() {
-    let u = `${WS_PROTO}//${location.host}/ws?token=${encodeURIComponent(TOKEN)}`;
+    const base = getServerBase();
+    let host, proto;
+    if (base) {
+      try {
+        const u = new URL(base);
+        host = u.host;
+        proto = u.protocol === 'https:' ? 'wss:' : 'ws:';
+      } catch { host = location.host; proto = location.protocol === 'https:' ? 'wss:' : 'ws:'; }
+    } else {
+      host = location.host;
+      proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    }
+    let u = `${proto}//${host}/ws?token=${encodeURIComponent(TOKEN)}`;
     if (currentSessionId) u += '&session=' + encodeURIComponent(currentSessionId);
     if (currentCwd)       u += '&cwd=' + encodeURIComponent(currentCwd);
     return u;
@@ -526,7 +567,7 @@
   if ($hAcct) {
     $hAcct.addEventListener('click', async () => {
       try {
-        const r = await fetch(`/api/accounts?token=${encodeURIComponent(TOKEN)}`);
+        const r = await fetch(api(`/api/accounts?token=${encodeURIComponent(TOKEN)}`));
         if (!r.ok) { showToast('account 列表拉失败 HTTP ' + r.status, 'error'); return; }
         const j = await r.json();
         const lines = (j.accounts || []).map((a) =>
@@ -1287,7 +1328,7 @@
 
   async function loadSessions() {
     try {
-      const r = await fetch(`/api/sessions?token=${encodeURIComponent(TOKEN)}`);
+      const r = await fetch(api(`/api/sessions?token=${encodeURIComponent(TOKEN)}`));
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const sessions = await r.json();
       renderSessionList(sessions);
@@ -1298,7 +1339,7 @@
 
   async function loadRecentCwds() {
     try {
-      const r = await fetch(`/api/recent-cwds?token=${encodeURIComponent(TOKEN)}`);
+      const r = await fetch(api(`/api/recent-cwds?token=${encodeURIComponent(TOKEN)}`));
       if (!r.ok) return;
       const j = await r.json();
       recentCwdList = j.cwds || [];
@@ -1393,7 +1434,7 @@
         e.stopPropagation();
         if (!confirm(`删除 session "${s.name || s.preview.slice(0,20) || s.sessionId.slice(0,8)}"？`)) return;
         try {
-          const r = await fetch(`/api/sessions/${encodeURIComponent(s.sessionId)}?token=${encodeURIComponent(TOKEN)}`, { method: 'DELETE' });
+          const r = await fetch(api(`/api/sessions/${encodeURIComponent(s.sessionId)}?token=${encodeURIComponent(TOKEN)}`), { method: 'DELETE' });
           if (!r.ok) throw new Error('HTTP ' + r.status);
           showToast('已删除', 'ok');
           loadSessions();
@@ -1447,10 +1488,10 @@
     }
 
     try {
-      const r = await fetch(
+      const r = await fetch(api(
         `/api/sessions/${encodeURIComponent(sessionId)}/messages` +
         `?token=${encodeURIComponent(TOKEN)}&limit=30`
-      );
+      ));
       if (!r.ok) {
         if (placeholder) {
           placeholder.textContent = `── 加载历史失败 (HTTP ${r.status}) ──`;
@@ -1704,7 +1745,7 @@
   async function saveRename() {
     if (!renamingSessionId) return;
     try {
-      const r = await fetch(`/api/sessions/${encodeURIComponent(renamingSessionId)}?token=${encodeURIComponent(TOKEN)}`, {
+      const r = await fetch(api(`/api/sessions/${encodeURIComponent(renamingSessionId)}?token=${encodeURIComponent(TOKEN)}`), {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name: $rnName.value.trim() || null }),
@@ -1858,7 +1899,7 @@
     pendingLabel = '';
     const check = () => {
       if (currentSessionId) {
-        fetch(`/api/sessions/${encodeURIComponent(currentSessionId)}?token=${encodeURIComponent(TOKEN)}`, {
+        fetch(api(`/api/sessions/${encodeURIComponent(currentSessionId)}?token=${encodeURIComponent(TOKEN)}`), {
           method: 'PATCH',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ name }),
@@ -2141,7 +2182,7 @@
     if (!reg) { log('warn', 'push: no SW registration'); return; }
 
     // Fetch VAPID public key once per session.
-    const r = await fetch(`/api/push/vapid?token=${encodeURIComponent(TOKEN)}`);
+    const r = await fetch(api(`/api/push/vapid?token=${encodeURIComponent(TOKEN)}`));
     if (!r.ok) {
       log('warn', `push: VAPID fetch failed HTTP ${r.status}`);
       return;
@@ -2167,7 +2208,7 @@
 
     const subJson = sub.toJSON();
     const deviceLabel = navigator.userAgent.slice(0, 80);
-    const postRes = await fetch(`/api/push/subscribe?token=${encodeURIComponent(TOKEN)}`, {
+    const postRes = await fetch(api(`/api/push/subscribe?token=${encodeURIComponent(TOKEN)}`), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ subscription: subJson, deviceLabel }),
@@ -2306,13 +2347,29 @@
   }
 
   // ─── boot ─────────────────────────────────────────────────────
-  if (!TOKEN) {
-    setStatus('error', '缺 token');
-    appendError('URL 缺少 ?token=… 参数。请使用 server 启动时打印的完整地址。');
-  } else {
+  function boot() {
+    TOKEN = getToken();
+    if (!TOKEN) {
+      if (inCapacitor()) {
+        // The Capacitor bootstrap form is responsible for surfacing this;
+        // index.html shows #bootstrap until both URL + token are stored.
+        setStatus('error', '等设置 server URL...');
+      } else {
+        setStatus('error', '缺 token');
+        appendError('URL 缺少 ?token=… 参数。请使用 server 启动时打印的完整地址。');
+      }
+      return;
+    }
     maybeShowHttpsBanner();
     maybeAskNotifyPermission();
     initSTT();
     connect();
   }
+  // Capacitor: bootstrap script fires this once URL + token are stored.
+  window.addEventListener('agentphone-config-ready', () => {
+    log('info', 'config ready — booting');
+    boot();
+  });
+  // Browser PWA: TOKEN should already be in the URL.
+  boot();
 })();

@@ -1267,3 +1267,35 @@ footer {
   text-align: center;
   margin-top: 6px;
 }
+
+/* Narrow phones: tighten header so all 6 buttons + title/status fit */
+@media (max-width: 460px) {
+  header {
+    padding: 8px 8px;
+    gap: 6px;
+    padding-top: max(8px, env(safe-area-inset-top));
+  }
+  .h-btn {
+    width: 28px;
+    height: 28px;
+    font-size: 13px;
+    border-radius: 6px;
+  }
+  .h-effort { padding: 0 6px; font-size: 10px; min-width: 30px; }
+  .h-acct { font-size: 10px; padding: 0 4px; }
+  .h-title { font-size: 11px; }
+  .h-cwd { font-size: 9.5px; }
+  .h-status { font-size: 10px; }
+  .h-dot { width: 6px; height: 6px; }
+}
+@media (max-width: 380px) {
+  /* Sub-380 phones: also shrink the dot text + ellipsize harder */
+  header {
+    padding: 7px 6px;
+    gap: 4px;
+  }
+  .h-btn { width: 26px; height: 26px; font-size: 12px; }
+  /* The status text disappears on the tiniest screens — the dot already
+     conveys the state. */
+  #status-text { display: none; }
+}
