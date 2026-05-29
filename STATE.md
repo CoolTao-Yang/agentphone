@@ -163,6 +163,8 @@ loser dies with `ede_diagnostic`. So ownership is exclusive; the modes above are
 - [ ] Team collab — multiple users, shared/handoff sessions (clay-style "mates").
 
 ### Research / reference
+- **`UX-BACKLOG.md`** — 51 code-level optimizations ranked by UX-impact/effort (cites our file:line +
+  the reference repo to crib from). The "DO 5 FIRST" set is all S-effort, impact-5, independently shippable.
 - `reference/REPOS.md` — 19 cloned repos + per-repo borrowable ideas (the survey output).
 - `DESIGN.md` — original 5-phase plan + hapi/clay/AGPL-vs-MIT analysis.
 - **Closest peer to study first: `reference/happy`** (21k★, slopus, MIT) — mobile+web Claude Code/Codex
