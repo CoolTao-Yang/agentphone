@@ -396,12 +396,17 @@
     const b = document.createElement('div');
     b.className = 'banner info link-mode';
     const sid = currentLinkExternalSid ?? '';
+    // Compact single-line: identifier on the left, two actions + dismiss
+    // on the right. Tooltip carries the "摘要, 不进 API context" caveat
+    // for users who want it; not worth eating a 3-line banner.
     b.innerHTML =
-      `📎 <b>linked</b> — 每个 turn 自动 mirror 到 cmax ` +
-      `<code>${sid.slice(0, 8)}</code> (摘要, 不进 API context)。 ` +
-      `<button type="button" class="link-merge">🔗 合并整段到 CLI</button>` +
-      ` <button type="button" class="link-unlink">✕ 取消 link</button>` +
-      ` <button class="x" type="button" aria-label="dismiss">✕</button>`;
+      `<span class="b-msg" title="每个 turn 自动 mirror 摘要到 cmax · 不进 API context">` +
+        `📎 → cmax <code>${sid.slice(0, 8)}</code>` +
+      `</span>` +
+      `<button type="button" class="banner-act primary link-merge" ` +
+        `title="把 B 整段对话作为 1 条 user message 注入到 CLI A 的 queue (桌面 CLI 需按 Enter)">合并</button>` +
+      `<button type="button" class="banner-act link-unlink" title="取消每轮 mirror, B 与 A 解绑">unlink</button>` +
+      `<button class="x" type="button" aria-label="dismiss">✕</button>`;
     b.querySelector('.x').addEventListener('click', () => b.remove());
     const unlinkBtn = b.querySelector('.link-unlink');
     if (unlinkBtn) {
@@ -2142,10 +2147,20 @@
   function maybeShowHttpsBanner() {
     if (window.isSecureContext) return;
     if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') return;
+    // Compact single-line summary; full instructions hide behind a tap. Keeps
+    // the banner from eating ~1/8 of the screen on a 420px-wide phone.
     addBanner('warn',
-      '⚠ HTTP 模式 — 🎤 语音不能用。host 上跑 ' +
-      '<code>tailscale serve --bg https / http://localhost:8765</code> ' +
-      '获取 HTTPS URL。'
+      '<details>' +
+        '<summary>' +
+          '<span class="b-msg">⚠ HTTP · 🎤 语音不可用</span>' +
+          '<span class="b-hint">▾ 怎么开</span>' +
+        '</summary>' +
+        '<div class="b-body">' +
+          'host (Windows) 上跑：<br>' +
+          '<code>tailscale serve --bg https / http://localhost:8765</code><br>' +
+          '然后用它给的 <code>https://*.ts.net</code> URL 换掉书签即可。' +
+        '</div>' +
+      '</details>'
     );
   }
   function maybeAskNotifyPermission() {

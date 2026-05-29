@@ -126,7 +126,10 @@ header {
 }
 .h-effort.is-max { color: var(--accent-2); border-color: var(--accent); }
 
-/* HTTPS warning + other top-of-messages banners */
+/* HTTPS warning + other top-of-messages banners.
+   Compact single-row layout: text ellipsizes, buttons never wrap.
+   For "details/summary"-based banners (e.g. HTTPS-how-to), use
+   .banner-collapse — summary stays on one line, body reveals on click. */
 .banner-row {
   display: flex;
   flex-direction: column;
@@ -134,11 +137,13 @@ header {
 }
 .banner-row:empty { display: none; }
 .banner {
-  padding: 8px 14px;
-  font-size: 12.5px;
-  line-height: 1.45;
+  padding: 6px 10px;
+  font-size: 12px;
+  line-height: 1.35;
   border-bottom: 1px solid var(--border);
-  display: flex; align-items: flex-start; gap: 8px;
+  display: flex; align-items: center; gap: 6px;
+  flex-wrap: wrap;            /* long-text banners (follow-mode) wrap naturally */
+  min-height: 30px;
 }
 .banner.warn { background: rgba(250, 204, 21, 0.08); color: var(--warn); border-bottom-color: rgba(250, 204, 21, 0.25); }
 .banner.info { background: rgba(125, 211, 252, 0.06); color: var(--user); }
@@ -148,14 +153,53 @@ header {
   padding: 1px 4px;
   border-radius: 3px;
   font-size: 11.5px;
+  white-space: nowrap;
+}
+/* The main text node — takes remaining width, ellipsizes overflow. */
+.banner .b-msg {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .banner .x {
-  margin-left: auto;
+  flex: 0 0 auto;
   background: transparent; border: none;
   color: inherit; opacity: 0.5;
   cursor: pointer; padding: 0 4px;
+  font-size: 13px;
 }
 .banner .x:hover { opacity: 1; }
+
+/* Expandable banner: summary is one line, click reveals body. */
+.banner > details { flex: 1 1 auto; min-width: 0; }
+.banner > details > summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex; align-items: center; gap: 6px;
+  width: 100%;
+  -webkit-tap-highlight-color: transparent;
+}
+.banner > details > summary::-webkit-details-marker { display: none; }
+.banner > details > summary::marker { display: none; }
+.banner > details > summary .b-msg { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.banner > details > summary .b-hint {
+  flex: 0 0 auto;
+  font-size: 11px; opacity: 0.65;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  padding: 0 6px;
+  font-family: var(--mono);
+}
+.banner > details[open] > summary .b-hint::after { content: ''; }
+.banner > details > .b-body {
+  padding: 6px 0 2px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: normal;
+  word-break: break-all;
+}
 
 /* Code-block copy button */
 .body pre {
@@ -934,19 +978,29 @@ footer {
 .debug .l-ok    { color: var(--ok); }
 
 
-/* Inline action buttons inside .banner */
+/* Inline action buttons inside .banner.
+   Sized to never wrap onto a new line on 360px-wide phones. */
 .banner-act {
+  flex: 0 0 auto;
   background: var(--surface-2);
   border: 1px solid var(--border);
   color: var(--text);
   border-radius: 4px;
-  padding: 1px 8px;
-  margin: 0 0 0 6px;
-  font-size: 11.5px;
+  padding: 2px 8px;
+  margin: 0;
+  font-size: 11px;
   font-family: var(--mono);
   cursor: pointer;
+  white-space: nowrap;
+  line-height: 1.4;
 }
 .banner-act:active { transform: scale(0.94); }
+.banner-act.primary {
+  background: var(--accent);
+  color: #1a0f00;
+  border-color: var(--accent);
+  font-weight: 600;
+}
 
 
 /* Multi-turn: pulse marker on sessions with an in-flight turn */
@@ -1268,7 +1322,10 @@ footer {
   margin-top: 6px;
 }
 
-/* Narrow phones: tighten header so all 6 buttons + title/status fit */
+/* Narrow phones: tighten header so all 6 buttons + title/status fit.
+   At ≤460 we already drop "已连接" text (the dot says it). At ≤400 we
+   also hide the "phone" half of the brand — the cmax account chip
+   carries identity, no need for redundant title. */
 @media (max-width: 460px) {
   header {
     padding: 8px 8px;
@@ -1283,19 +1340,24 @@ footer {
   }
   .h-effort { padding: 0 6px; font-size: 10px; min-width: 30px; }
   .h-acct { font-size: 10px; padding: 0 4px; }
-  .h-title { font-size: 11px; }
+  .h-title { font-size: 11px; gap: 6px; }
   .h-cwd { font-size: 9.5px; }
   .h-status { font-size: 10px; }
   .h-dot { width: 6px; height: 6px; }
+  /* Drop redundant "已连接" / "连接中" — the colored dot already conveys
+     state, and the label was eating ~50px of horizontal real estate. */
+  #status-text { display: none; }
+}
+@media (max-width: 400px) {
+  /* The "phone" half of the brand is decorative; cmax chip identifies. */
+  .h-title .brand-suffix { display: none; }
 }
 @media (max-width: 380px) {
-  /* Sub-380 phones: also shrink the dot text + ellipsize harder */
+  /* Sub-380 phones: shrink everything one notch */
   header {
     padding: 7px 6px;
     gap: 4px;
   }
   .h-btn { width: 26px; height: 26px; font-size: 12px; }
-  /* The status text disappears on the tiniest screens — the dot already
-     conveys the state. */
-  #status-text { display: none; }
+  .h-title .brand-prefix { display: none; }
 }
