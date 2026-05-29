@@ -140,8 +140,12 @@ export class ClaudeSdkAdapter implements HarnessAdapter {
   startTurn(opts: StartTurnOptions): AgentTurn {
     const turnId = randomUUID();
 
-    const claudeCanUseTool: ClaudeCanUseTool = async (toolName, input) => {
-      const r = await opts.canUseTool(toolName, input as Record<string, unknown>);
+    const claudeCanUseTool: ClaudeCanUseTool = async (toolName, input, options) => {
+      // Pass the SDK's real toolUseID so the runner's tool_request shares an
+      // id with the eventual tool_result (which carries the same SDK id) —
+      // otherwise the client can't fold the result into its card.
+      const sdkToolUseId = (options as any)?.toolUseID as string | undefined;
+      const r = await opts.canUseTool(toolName, input as Record<string, unknown>, sdkToolUseId);
       if (r.allow) {
         return { behavior: 'allow', updatedInput: r.updatedInput ?? input } satisfies PermissionResult;
       }

@@ -38,7 +38,12 @@ export type HarnessMode = 'owned' | 'external';
 
 export type CanUseToolFn = (
   toolName: string,
-  input: Record<string, unknown>
+  input: Record<string, unknown>,
+  // The harness's real tool-use id for this call, when available (e.g. the
+  // Anthropic SDK's options.toolUseID). The runner uses it as the event id so
+  // tool_request and tool_result share the same id and the client can fold the
+  // result into the right card. Falls back to a generated id when absent.
+  toolUseId?: string,
 ) => Promise<CanUseToolResult>;
 
 export type CanUseToolResult =

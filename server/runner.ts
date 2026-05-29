@@ -172,8 +172,11 @@ export class TurnRunner {
     const autoApproveAll = !!opts.autoApproveAllTools;
     const perToolAuto = opts.autoApproveTools ?? {};
 
-    const canUseTool: CanUseToolFn = async (toolName, input) => {
-      const toolUseId = randomUUID();
+    const canUseTool: CanUseToolFn = async (toolName, input, sdkToolUseId) => {
+      // Prefer the harness's real tool-use id so tool_request and tool_result
+      // share an id (lets the client fold the result into the right card,
+      // open it, and flip 运行中→完成). Fall back to a generated id.
+      const toolUseId = sdkToolUseId || randomUUID();
 
       // Auto-approve sources, in order:
       //   1. global ⚡ auto mode (autoApproveAll)

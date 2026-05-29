@@ -989,7 +989,12 @@
     body.className = 'body';
 
     const card = document.createElement('div');
-    card.className = 'tool-card ' + (autoApproved ? '' : 'pending');
+    // Open by default when the card needs review (pending approval — you must
+    // see what you're approving) or carries a diff/content worth seeing
+    // (Edit/MultiEdit/Write). Bash/Read/etc. start collapsed (header summary
+    // is enough; tap to expand). (UX-BACKLOG #7)
+    const openByDefault = !autoApproved || /^(edit|multiedit|write)$/i.test(String(toolName));
+    card.className = 'tool-card ' + (autoApproved ? '' : 'pending') + (openByDefault ? ' open' : '');
     card.dataset.toolId = toolUseId;
 
     const header = document.createElement('header');
