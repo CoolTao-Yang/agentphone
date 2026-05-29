@@ -60,7 +60,13 @@ header {
   border-bottom: 1px solid var(--border);
   background: var(--bg);
   position: sticky; top: 0; z-index: 10;
-  padding-top: max(10px, env(safe-area-inset-top));
+  /* Three-layer top padding for status-bar / notch / MIUI capsule clearance:
+       1. env(safe-area-inset-top) — modern browsers in viewport-fit:cover mode
+       2. fallback 36px if env returns 0 (older WebViews, WeChat browser, some
+          PWAs on Chinese ROMs that don't expose the inset)
+       3. an absolute minimum of 40px so the buttons are never tap-blocked by
+          a system status bar or a MIUI floating overlay capsule */
+  padding-top: max(env(safe-area-inset-top, 36px), 40px);
 }
 .h-btn {
   flex: 0 0 auto;
@@ -1366,7 +1372,8 @@ footer {
   header {
     padding: 8px 8px;
     gap: 6px;
-    padding-top: max(8px, env(safe-area-inset-top));
+    /* Same three-layer clearance as base, slightly tighter (38px min vs 40px). */
+    padding-top: max(env(safe-area-inset-top, 34px), 38px);
   }
   .h-btn {
     width: 28px;
@@ -1393,6 +1400,7 @@ footer {
   header {
     padding: 7px 6px;
     gap: 4px;
+    padding-top: max(env(safe-area-inset-top, 32px), 36px);
   }
   .h-btn { width: 26px; height: 26px; font-size: 12px; }
   .h-title .brand-prefix { display: none; }
