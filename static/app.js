@@ -1304,16 +1304,39 @@
           // reload sessions to update list (current session moved to top)
           loadSessions();
           break;
-        case 'error':
+        case 'error': {
           setBusy(false);
           log('error', m.message);
-          if (/context\s*limit|too\s*long|maximum.*context|compact.*continue|ede_diagnostic|result_type=user|stop_reason=null/i.test(m.message || '')) {
-            appendContextFullCard(m.message);
+          // Context-limit detection: ONLY match real "you ran out of context"
+          // signals. The earlier regex also matched ede_diagnostic /
+          // result_type=user / stop_reason=null — those are the SDK's generic
+          // *internal-error envelope*, not a context-window message, so any
+          // transient SDK hiccup got mis-rendered as "上下文已满" + suggested
+          // compact-or-new. That's actively misleading: the session was fine,
+          // a single retry usually fixed it.
+          const msg = String(m.message || '');
+          const realContextLimit =
+            /prompt\s*is\s*too\s*long|context[\s_-]*length[\s_-]*exceeded|maximum.*context[\s_-]*length|context\s*window.*exceed|exceeded.*context\s*window|tokens?\s*exceed.*context/i.test(msg);
+          const sdkDiagnostic =
+            /\bede_diagnostic\b|result_type\s*=\s*user|stop_reason\s*=\s*null/i.test(msg);
+          if (realContextLimit) {
+            appendContextFullCard(msg);
+          } else if (sdkDiagnostic) {
+            // SDK internal failure (transient). Translate the cryptic envelope
+            // into a useful sentence and surface the raw text in a details/.
+            const friendly =
+              '⚠ Claude SDK 内部短暂故障 (ede_diagnostic) — session 没问题, ' +
+              '直接再发一次大概率就成功。常见诱因: 同一 jsonl 两个 claude.exe 并发写入, ' +
+              '或 SDK stream parse 抖动。';
+            appendError(friendly);
+            showToast('SDK 抖动 · 再发一次', 'error', 3500);
+            // Stash the raw error in the log only (already done above).
           } else {
-            appendError(m.message);
-            showToast(m.message, 'error', 3500);
+            appendError(msg);
+            showToast(msg, 'error', 3500);
           }
           break;
+        }
         case 'unauthorized':
           setStatus('error', 'token 错误');
           appendError('URL 里的 token 不对');
