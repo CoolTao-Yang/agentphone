@@ -2314,10 +2314,13 @@
     if (!inCapacitor()) return;
     if (apkUpdateBannerShown) return;
     const myBuildRaw = localStorage.getItem('agentphone:apkBuildNumber') || '';
-    const myBuild = parseInt(myBuildRaw, 10);
+    let myBuild = parseInt(myBuildRaw, 10);
     if (!Number.isFinite(myBuild) || myBuild <= 0) {
-      log('info', 'apk update check: no bundled build-info (manual install?), skipping');
-      return;
+      // Older APK that predates build-info.json stamping. Treat as "very old"
+      // so the banner appears and the user gets onto the auto-update train.
+      // They'll re-install once, then localStorage gets stamped from then on.
+      log('info', 'apk update check: no bundled build-info, assuming pre-CI install');
+      myBuild = 0;
     }
     try {
       const r = await fetch(api('/api/apk-info'), { cache: 'no-store' });
