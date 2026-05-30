@@ -456,6 +456,7 @@ function createHandler(c: any, cfg: Cfg) {
           allow: msg.decision === 'allow',
           allowRestOfTurn: msg.allowRestOfTurn,
           reason: msg.reason,
+          updatedInput: msg.updatedInput,
         });
         return;
       }

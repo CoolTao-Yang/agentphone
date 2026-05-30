@@ -136,6 +136,17 @@
   let lastHistoryTotal = -1;
   /** @type {Array<{ data: string, mediaType: string, name?: string }>} */
   let pendingImages = [];
+  /** @type {{text:string,images:Array}|null} last prompt sent — for #8 rate-limit auto-resume */
+  let lastSentPrompt = null;
+  /** #8 — live timers of the (single) active rate-limit card, so clearMessages
+   *  can tear them down and a new card supersedes the old one (no leak/zombie). */
+  let rlTimers = null;  // { tick, autoTimer } | null
+  function clearRateLimitTimers() {
+    if (!rlTimers) return;
+    if (rlTimers.tick) clearInterval(rlTimers.tick);
+    if (rlTimers.autoTimer) clearTimeout(rlTimers.autoTimer);
+    rlTimers = null;
+  }
   /** @type {{ autoApproveTools: boolean, effort: string, model?: string }} */
   let settings = { autoApproveTools: false, effort: 'max', version: 0 };
   /** @type {Array<{value:string,displayName:string,description?:string,supportsEffort?:boolean,supportedEffortLevels?:string[]}>} */
@@ -385,10 +396,15 @@
     $dot.className = 'h-dot' + (cls ? ' ' + cls : '');
     $statusText.textContent = text;
   }
+  // Single source of truth for the send button's enabled state (SLASH-5):
+  // busy, follow-blocked, or empty composer all disable it.
+  function refreshSendDisabled() {
+    $send.disabled = busy || isFollowBlocked() || (!$input.value.trim() && pendingImages.length === 0);
+  }
   function setBusy(b) {
     busy = b;
     const followBlocked = isFollowBlocked();
-    $send.disabled = busy || followBlocked || (!$input.value.trim() && pendingImages.length === 0);
+    refreshSendDisabled();
     $stop.classList.toggle('hidden', !busy);
     $send.classList.toggle('hidden', busy);
     if (busy) {
@@ -1144,6 +1160,29 @@
       labelForever.appendChild(cbForever);
       labelForever.appendChild(lt2);
 
+      // #32 — edit the key arg before approving. Bash → command, Write/Edit →
+      // file_path. Only these known-safe keys; the server re-validates. If the
+      // user changes it, 批准 sends updatedInput.
+      let editField = null, editInput = null;
+      const lname = String(toolName).toLowerCase();
+      if (lname === 'bash') editField = 'command';
+      else if (/^(write|edit|multiedit)$/.test(lname)) editField = 'file_path';
+      let editRow = null;
+      const origVal = (editField && input && typeof input === 'object') ? input[editField] : undefined;
+      if (editField && typeof origVal === 'string') {
+        editRow = document.createElement('div');
+        editRow.className = 'edit-arg-row';
+        const elab = document.createElement('span');
+        elab.className = 'edit-arg-label';
+        elab.textContent = editField === 'command' ? '命令（可改后批准）' : '路径（可改后批准）';
+        editInput = document.createElement(editField === 'command' ? 'textarea' : 'input');
+        editInput.className = 'edit-arg-input';
+        if (editField === 'command') editInput.rows = 2;
+        editInput.value = origVal;
+        editRow.appendChild(elab);
+        editRow.appendChild(editInput);
+      }
+
       // Deny-with-reason: instead of an immediate canned rejection, the
       // first 拒绝 click reveals an inline reason input. The user can type
       // "用 ripgrep 重做" / "改文件路径" to steer the agent, or just confirm
@@ -1178,8 +1217,15 @@
           update[toolName] = true;
           sendWS({ type: 'set_settings', perToolAuto: update, expectedVersion: settings.version });
         }
-        sendWS({ type: 'tool_response', toolUseId, decision: 'allow', allowRestOfTurn: cb.checked });
-        track('tool_approve', { tool: toolName, restOfTurn: cb.checked, forever: cbForever.checked });
+        let updatedInput;
+        if (editField && editInput && editInput.value !== origVal) {
+          updatedInput = { [editField]: editInput.value };
+          // F3 — reflect the edit in the card body so it shows what was approved
+          tBody.innerHTML = '';
+          tBody.appendChild(renderToolInputBody(toolName, { ...input, ...updatedInput }));
+        }
+        sendWS({ type: 'tool_response', toolUseId, decision: 'allow', allowRestOfTurn: cb.checked, updatedInput });
+        track('tool_approve', { tool: toolName, restOfTurn: cb.checked, forever: cbForever.checked, edited: !!updatedInput });
         markToolResolved(toolUseId, 'allow');
       });
       denyBtn.addEventListener('click', () => {
@@ -1189,6 +1235,7 @@
         setTimeout(() => { try { denyInput.focus(); } catch {} }, 30);
       });
 
+      if (editRow) approveBox.appendChild(editRow);
       approveBox.appendChild(labelAll);
       approveBox.appendChild(labelForever);
       approveBox.appendChild(denyBtn);
@@ -1336,6 +1383,118 @@
       clearMessages();
       showToast('已创建新 session', 'ok', 1500);
     });
+  }
+
+  // #8 — parse a usage/rate-limit reset time out of the error text. Handles the
+  // common TUI phrasings: "resets at 14:30", "resets at 2:30pm", "try again in
+  // 12m / 1h30m / 45s", and a raw unix epoch ("resetsAt: 1780078800"). Returns
+  // an absolute epoch (ms) or null.
+  function parseRateLimitReset(msg) {
+    const s = String(msg || '');
+    let m;
+    // raw epoch (seconds or ms)
+    if ((m = s.match(/reset[^0-9]{0,12}(\d{10,13})/i))) {
+      const n = Number(m[1]); return n > 1e12 ? n : n * 1000;
+    }
+    // "in 1h30m" / "in 12m" / "in 45s"
+    if ((m = s.match(/(?:try again|retry|resets?)\s*(?:again\s*)?in\s*((?:\d+\s*[hms]\s*)+)/i))) {
+      let ms = 0; const re = /(\d+)\s*([hms])/gi; let mm;
+      while ((mm = re.exec(m[1]))) { const v = Number(mm[1]); ms += mm[2].toLowerCase() === 'h' ? v * 3600e3 : mm[2].toLowerCase() === 'm' ? v * 60e3 : v * 1e3; }
+      return ms > 0 ? Date.now() + ms : null;
+    }
+    // "resets at 14:30" / "at 2:30pm". NB: interpreted in the DEVICE's local
+    // timezone (the string carries no tz); the epoch + "in Xh" branches above
+    // are preferred and tz-exact, this HH:MM form is a best-effort fallback.
+    if ((m = s.match(/(?:resets?|again)\s*(?:at)?\s*(\d{1,2}):(\d{2})\s*(am|pm)?/i))) {
+      const now = new Date(); const d = new Date(now);
+      let hr = Number(m[1]); const min = Number(m[2]); const ap = (m[3] || '').toLowerCase();
+      if (ap === 'pm' && hr < 12) hr += 12; if (ap === 'am' && hr === 12) hr = 0;
+      d.setHours(hr, min, 0, 0);
+      if (d.getTime() <= now.getTime()) d.setDate(d.getDate() + 1); // next occurrence
+      return d.getTime();
+    }
+    return null;
+  }
+
+  // #8 — dedicated rate-limit card with a live countdown + a resend that's
+  // disabled until reset, then re-enables and auto-resends the last prompt.
+  function appendRateLimitCard(rawMsg, resetMs) {
+    clearEmpty();
+    const wrap = document.createElement('div');
+    wrap.className = 'msg error rate-limit';
+    const who = document.createElement('div'); who.className = 'who'; who.textContent = '用量受限';
+    const body = document.createElement('div'); body.className = 'body';
+    const lead = document.createElement('p'); lead.style.margin = '0 0 8px';
+    lead.textContent = resetMs ? '触发用量/速率限制。到点会自动重发上一条:' : '触发用量/速率限制。稍后重试:';
+    const cd = document.createElement('div'); cd.className = 'rl-countdown';
+    const acts = document.createElement('div'); acts.className = 'cf-actions';
+    const resend = document.createElement('button'); resend.className = 'tool-btn allow'; resend.textContent = '↻ 重发上一条';
+    acts.appendChild(resend);
+    body.appendChild(lead); if (resetMs) body.appendChild(cd); body.appendChild(acts);
+    if (rawMsg) {
+      const raw = document.createElement('details');
+      const sum = document.createElement('summary');
+      sum.style.cssText = 'cursor:pointer;font-size:11px;color:var(--muted)';
+      sum.textContent = '原始错误';
+      const pre = document.createElement('pre');
+      pre.style.cssText = 'font-size:11px;color:var(--muted);white-space:pre-wrap';
+      pre.textContent = String(rawMsg);
+      raw.appendChild(sum); raw.appendChild(pre); body.appendChild(raw);
+    }
+    wrap.appendChild(who); wrap.appendChild(body);
+    $messages.appendChild(wrap); autoScroll();
+
+    const cardSession = currentSessionId;   // RL-2: the session this card belongs to
+    let fired = false;
+    function doResend() {
+      if (fired) return; fired = true;
+      clearRateLimitTimers();
+      // RL-2: never auto-inject the old prompt into a session the user switched to.
+      if (currentSessionId !== cardSession) {
+        showToast('session 已切换 · 已取消自动重发', 'warn', 2500);
+        resend.disabled = true; resend.textContent = '已取消（换了 session）';
+        return;
+      }
+      if (!lastSentPrompt) {
+        showToast('没有可重发的上一条', 'warn', 2000);
+        resend.disabled = false; resend.textContent = '↻ 重发上一条'; fired = false; return;
+      }
+      const im = lastSentPrompt.images && lastSentPrompt.images.length ? lastSentPrompt.images : undefined;
+      const el = appendUser(lastSentPrompt.text, im || []);
+      const msg = { type: 'prompt', text: lastSentPrompt.text, images: im };
+      resend.disabled = true; resend.textContent = '重发中…';
+      // RL-3: respect offline — queue to the outbox instead of faking a send.
+      if (isOnline()) {
+        sendWS(msg); setBusy(true); requestNotifyOnFirstSend();
+      } else {
+        tagPending(el);
+        outbox.push({ msg, kind: 'prompt', el, sessionId: currentSessionId ?? null });
+        showToast('离线 · 已排队，重连后自动发送', 'warn', 3000);
+      }
+    }
+    resend.addEventListener('click', doResend);
+    if (resetMs) {
+      resend.disabled = true;
+      clearRateLimitTimers();           // RL-6: supersede any prior live card
+      rlTimers = { tick: null, autoTimer: null };
+      const render = () => {
+        // RL-1: a detached card (clearMessages / new session) self-cancels.
+        if (!document.contains(wrap)) { clearRateLimitTimers(); return; }
+        const left = Math.max(0, resetMs - Date.now());
+        if (left <= 0) {
+          if (rlTimers && rlTimers.tick) { clearInterval(rlTimers.tick); rlTimers.tick = null; }
+          cd.textContent = '已到重置时间';
+          resend.disabled = false;
+          if (!fired && rlTimers) rlTimers.autoTimer = setTimeout(doResend, 400);
+          return;
+        }
+        const sec = Math.ceil(left / 1000), h = Math.floor(sec / 3600), mm = Math.floor((sec % 3600) / 60), ss = sec % 60;
+        cd.textContent = `重置倒计时 ${h > 0 ? h + 'h' : ''}${(mm < 10 && h > 0 ? '0' : '') + mm}m${(ss < 10 ? '0' : '') + ss}s`;
+        resend.textContent = '↻ 重发(等重置)';
+      };
+      render();
+      if (rlTimers) rlTimers.tick = setInterval(render, 1000);
+    }
   }
 
   // ─── agent event dispatch ─────────────────────────────────────
@@ -1695,6 +1854,13 @@
             appendError(friendly);
             showToast('SDK 抖动 · 再发一次', 'error', 3500);
             // Stash the raw error in the log only (already done above).
+          } else if (/usage\s*limit|rate[\s_-]?limit|rate[\s-]?limited|too many requests|(?:status|http|code)\s*[:=]?\s*429|\b429\b\s*(?:too\s*many|error)|usage\s*cap/i.test(msg)) {
+            // NB: a lone "resets at …" is intentionally NOT a trigger (it
+            // misfires on benign text); we require a real limit keyword, then
+            // parseRateLimitReset extracts the reset time from the same message.
+            // #8 — usage/rate limit: dedicated card w/ countdown + auto-resume
+            appendRateLimitCard(msg, parseRateLimitReset(msg));
+            showToast('用量受限 · 见卡片', 'error', 3500);
           } else {
             appendError(msg);
             showToast(msg, 'error', 3500);
@@ -2080,6 +2246,7 @@
   function clearMessages() {
     streamState.clear();
     toolCards.clear();
+    clearRateLimitTimers();   // #8 — kill any live countdown so it can't zombie-resend
     $messages.innerHTML = '';
     lastTurnId = null;
     lastRenderedSeq = -1;
@@ -2314,6 +2481,7 @@
     pendingImages = [];
     renderChips();
     autoResize();
+    closeSlash();   // #21 — hide the slash menu after send/clear
   }
 
   function sendPrompt() {
@@ -2362,6 +2530,7 @@
     }
     const el = appendUser(text, imgs);
     const msg = { type: 'prompt', text, images: imgs.length ? imgs : undefined };
+    lastSentPrompt = { text, images: imgs.slice() };  // #8 — for rate-limit auto-resume
     track('prompt_sent', { chars: text.length, hasImages: imgs.length > 0, online });
     clearComposer();
     if (online) {
@@ -2419,7 +2588,7 @@
       $chips.appendChild(chip);
     });
     // Refresh send button enable state
-    $send.disabled = busy || (!$input.value.trim() && pendingImages.length === 0);
+    refreshSendDisabled();
   }
 
   $attachBtn.addEventListener('click', () => {
@@ -2427,35 +2596,69 @@
     $filePicker.click();
   });
 
+  // Shared image-intake path for the picker, clipboard paste (#11) and
+  // drag-drop. Validates type/size/count, base64-encodes, pushes to the same
+  // pendingImages pipeline.
+  async function addImageFiles(files) {
+    const arr = Array.from(files || []);
+    if (!arr.length) return;
+    for (const f of arr) {
+      if (!f.type || !f.type.startsWith('image/')) { showToast(`${f.name || '文件'} 不是图片`, 'error'); continue; }
+      if (f.size > 5 * 1024 * 1024) { showToast(`${f.name || '图片'} 太大 (>5MB)`, 'error'); continue; }
+      if (pendingImages.length >= 4) { showToast('最多 4 张图', 'error'); break; }
+      try {
+        const data = await fileToBase64(f);
+        // F2 — re-check the cap AFTER the await (concurrent paste+drop could
+        // both pass the entry check, then each push past 4).
+        if (pendingImages.length >= 4) { showToast('最多 4 张图', 'error'); break; }
+        const mediaType = (f.type === 'image/jpg' ? 'image/jpeg' : f.type);
+        pendingImages.push({ data, mediaType, name: f.name || 'pasted.png' });
+      } catch (err) {
+        log('error', 'image read fail: ' + (err && err.message || err));
+        showToast('读取图片失败', 'error');
+      }
+    }
+    renderChips();
+  }
+
   $filePicker.addEventListener('change', async (e) => {
     const target = e.target;
     const files = target && target.files ? Array.from(target.files) : [];
     log('info', `picker change: ${files.length} files (${files.map(f => f.type + '/' + Math.round(f.size/1024) + 'K').join(', ')})`);
-    for (const f of files) {
-      if (!f.type.startsWith('image/')) {
-        showToast(`${f.name} 不是图片`, 'error');
-        continue;
-      }
-      if (f.size > 5 * 1024 * 1024) {
-        showToast(`${f.name} 太大 (>5MB)`, 'error');
-        continue;
-      }
-      if (pendingImages.length >= 4) {
-        showToast('最多 4 张图', 'error');
-        break;
-      }
-      try {
-        const data = await fileToBase64(f);
-        const mediaType = (f.type === 'image/jpg' ? 'image/jpeg' : f.type);
-        pendingImages.push({ data, mediaType, name: f.name });
-      } catch (err) {
-        log('error', 'image read fail: ' + (err && err.message || err));
-        showToast(`读取 ${f.name} 失败`, 'error');
-      }
-    }
-    renderChips();
+    await addImageFiles(files);
     if (target) target.value = '';
   });
+
+  // #11 paste-image: long-press-paste / Ctrl-V a screenshot into the composer.
+  $input.addEventListener('paste', (e) => {
+    const items = e.clipboardData && e.clipboardData.items ? Array.from(e.clipboardData.items) : [];
+    const imgs = items.filter((it) => it.kind === 'file' && it.type.startsWith('image/'))
+                      .map((it) => it.getAsFile()).filter(Boolean);
+    if (imgs.length) {
+      e.preventDefault();                 // don't also paste a filename/blob url
+      addImageFiles(imgs);
+      showToast(`已粘贴 ${imgs.length} 张图`, 'ok', 1500);
+    }
+  });
+
+  // #11 drag-drop: drop image files onto the footer (desktop) with an overlay.
+  const hasFiles = (dt) => !!dt && Array.from(dt.types || []).includes('Files');
+  const $footer = document.querySelector('footer');
+  if ($footer) {
+    let dragDepth = 0;
+    $footer.addEventListener('dragover', (e) => { if (hasFiles(e.dataTransfer)) e.preventDefault(); });
+    $footer.addEventListener('dragenter', (e) => { if (!hasFiles(e.dataTransfer)) return; e.preventDefault(); dragDepth++; $footer.classList.add('dropping'); });
+    $footer.addEventListener('dragleave', () => { dragDepth = Math.max(0, dragDepth - 1); if (!dragDepth) $footer.classList.remove('dropping'); });
+    $footer.addEventListener('drop', (e) => {
+      if (!hasFiles(e.dataTransfer)) return;
+      e.preventDefault(); dragDepth = 0; $footer.classList.remove('dropping');
+      addImageFiles(e.dataTransfer.files);
+    });
+  }
+  // F1 — swallow file drops ANYWHERE else on the page so a mis-drop can't
+  // navigate the tab away to the dropped image. (Footer handler runs first.)
+  window.addEventListener('dragover', (e) => { if (hasFiles(e.dataTransfer)) e.preventDefault(); });
+  window.addEventListener('drop', (e) => { if (hasFiles(e.dataTransfer)) e.preventDefault(); });
 
   function pendingLabelApplyOnSessionInit() {
     const name = pendingLabel;
@@ -2482,7 +2685,7 @@
   function autoResize() {
     $input.style.height = 'auto';
     $input.style.height = Math.min($input.scrollHeight, window.innerHeight * 0.38) + 'px';
-    $send.disabled = busy || (!$input.value.trim() && pendingImages.length === 0);
+    refreshSendDisabled();
   }
 
   // ─── voice STT ────────────────────────────────────────────────
@@ -2693,9 +2896,85 @@
     if ('speechSynthesis' in window) speechSynthesis.cancel();
   }
 
+  // ─── #21 slash-command autocomplete ───────────────────────────
+  const $slashMenu = document.getElementById('slash-menu');
+  const SLASH_COMMANDS = [
+    { cmd: '/compact', desc: '压缩上下文，省 token' },
+    { cmd: '/clear',   desc: '清空当前对话' },
+    { cmd: '/model',   desc: '切换模型' },
+    { cmd: '/cost',    desc: '本次会话花费' },
+    { cmd: '/config',  desc: '配置' },
+    { cmd: '/help',    desc: '帮助' },
+  ];
+  let slashItems = [], slashIndex = -1, slashOpen = false;
+  function slashFreq() { try { return JSON.parse(localStorage.getItem('agentphone:slashfreq') || '{}') || {}; } catch { return {}; } }
+  function bumpSlashFreq(cmd) { try { const f = slashFreq(); f[cmd] = (f[cmd] || 0) + 1; localStorage.setItem('agentphone:slashfreq', JSON.stringify(f)); } catch {} }
+  function closeSlash() { slashOpen = false; slashItems = []; slashIndex = -1; if ($slashMenu) { $slashMenu.classList.remove('open'); $slashMenu.innerHTML = ''; } }
+  function renderSlash() {
+    if (!$slashMenu) return;
+    $slashMenu.innerHTML = '';
+    slashItems.forEach((it, i) => {
+      const row = document.createElement('div');
+      row.className = 'sc-item' + (i === slashIndex ? ' is-active' : '');
+      row.setAttribute('role', 'option');
+      const c = document.createElement('span'); c.className = 'sc-cmd'; c.textContent = it.cmd;
+      const d = document.createElement('span'); d.className = 'sc-desc'; d.textContent = it.desc;
+      row.appendChild(c); row.appendChild(d);
+      // mousedown (not click) so selection fires before the textarea blurs
+      row.addEventListener('mousedown', (e) => { e.preventDefault(); insertSlash(it.cmd); });
+      $slashMenu.appendChild(row);
+    });
+    $slashMenu.classList.add('open');
+  }
+  function updateSlashMenu() {
+    if (!$slashMenu) return;
+    const pos = $input.selectionStart ?? $input.value.length;
+    // Only when a slash token is at the very START of the composer (the `^`
+    // anchor also means we never trigger inside a ``` fence or mid-sentence).
+    const m = $input.value.slice(0, pos).match(/^\/(\S*)$/);
+    if (!m) { if (slashOpen) closeSlash(); return; }
+    const q = m[1].toLowerCase();
+    const freq = slashFreq();
+    slashItems = SLASH_COMMANDS
+      .filter((sc) => sc.cmd.slice(1).toLowerCase().startsWith(q))
+      .sort((a, b) => (freq[b.cmd] || 0) - (freq[a.cmd] || 0) || a.cmd.localeCompare(b.cmd));
+    if (!slashItems.length) { closeSlash(); return; }
+    slashOpen = true; slashIndex = 0; renderSlash();
+  }
+  function moveSlash(delta) {
+    if (!slashItems.length) return;
+    slashIndex = (slashIndex + delta + slashItems.length) % slashItems.length;
+    renderSlash();
+  }
+  function insertSlash(cmd) {
+    // Replace only the leading slash token (everything before the cursor, which
+    // the trigger regex guaranteed is `/\S*`); preserve any text after the
+    // cursor / on following lines instead of clobbering the whole value.
+    const pos = $input.selectionStart ?? $input.value.length;
+    const tail = $input.value.slice(pos);
+    $input.value = cmd + ' ' + tail;
+    const caret = (cmd + ' ').length;
+    try { $input.setSelectionRange(caret, caret); } catch {}
+    bumpSlashFreq(cmd);
+    closeSlash();
+    autoResize();
+    $input.focus();
+    refreshSendDisabled();
+  }
+
   // ─── event wiring ─────────────────────────────────────────────
-  $input.addEventListener('input', autoResize);
+  $input.addEventListener('input', () => { autoResize(); updateSlashMenu(); });
+  $input.addEventListener('blur', () => setTimeout(closeSlash, 120));
   $input.addEventListener('keydown', (e) => {
+    if (slashOpen) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); moveSlash(1); return; }
+      if (e.key === 'ArrowUp') { e.preventDefault(); moveSlash(-1); return; }
+      if (e.key === 'Escape') { e.preventDefault(); closeSlash(); return; }
+      if ((e.key === 'Tab' || e.key === 'Enter') && !e.shiftKey && !e.isComposing) {
+        const it = slashItems[slashIndex];
+        if (it) { e.preventDefault(); insertSlash(it.cmd); return; }
+      }
+    }
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
       sendPrompt();

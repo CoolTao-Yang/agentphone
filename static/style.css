@@ -766,9 +766,34 @@ footer {
   display: flex; flex-direction: column; gap: 6px;
   position: sticky; bottom: 0;
 }
+/* #11 drag-drop overlay */
+footer.dropping { outline: 2px dashed var(--accent); outline-offset: -5px; }
+footer.dropping::before {
+  content: '拖放图片到这里';
+  position: absolute; inset: 0; z-index: 5;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0,0,0,0.55); color: var(--accent-2);
+  font-size: 13px; letter-spacing: .04em; pointer-events: none;
+}
 .composer-row {
   display: flex; align-items: flex-end; gap: 7px;
 }
+/* #21 slash-command autocomplete menu */
+.slash-menu {
+  position: absolute; left: 8px; right: 8px; bottom: calc(100% + 4px);
+  background: var(--bg); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 -6px 24px rgba(0,0,0,0.45);
+  max-height: 240px; overflow-y: auto; z-index: 60;
+  display: none; padding: 4px;
+}
+.slash-menu.open { display: block; }
+.sc-item {
+  display: flex; align-items: baseline; gap: 9px;
+  padding: 8px 10px; border-radius: 7px; cursor: pointer;
+}
+.sc-item.is-active { background: var(--surface); }
+.sc-cmd { font-family: var(--mono); font-size: 13px; color: var(--accent-2); flex: 0 0 auto; }
+.sc-desc { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .attach-chips {
   display: none;
@@ -1304,6 +1329,11 @@ footer {
   color: var(--muted);
   margin: 6px 0 0;
 }
+/* #8 rate-limit countdown */
+.rl-countdown {
+  font-family: var(--mono); font-size: 13px;
+  color: var(--accent-2); margin: 0 0 8px;
+}
 
 /* ───── External CLI follow-mode indicators ───── */
 /* Drawer dot next to session name */
@@ -1588,6 +1618,16 @@ footer {
   outline: none;
 }
 .tool-approve .deny-reason-input:focus { border-color: var(--error); }
+/* #32 edit-arg-before-approve */
+.tool-approve .edit-arg-row { flex-basis: 100%; display: flex; flex-direction: column; gap: 4px; margin-bottom: 4px; }
+.tool-approve .edit-arg-label { font-size: 11px; color: var(--muted); }
+.tool-approve .edit-arg-input {
+  width: 100%; box-sizing: border-box;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+  color: var(--text); font-family: var(--mono); font-size: 12.5px;
+  padding: 6px 9px; outline: none; resize: vertical;
+}
+.tool-approve .edit-arg-input:focus { border-color: var(--accent); }
 
 /* ───── Per-tool rich rendering (UX-BACKLOG #7) ───── */
 .tool-render { font-size: 12.5px; }

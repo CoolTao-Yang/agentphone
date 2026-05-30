@@ -84,7 +84,7 @@ export class TurnRunner {
   private pendingTools = new Map<string, {
     name: string;
     input: unknown;
-    resolve: (decision: { allow: boolean; reason?: string }) => void;
+    resolve: (decision: { allow: boolean; reason?: string; updatedInput?: Record<string, unknown> }) => void;
   }>();
 
   // Tool names the user said "本轮全 approve" for.
@@ -208,10 +208,14 @@ export class TurnRunner {
               event: { kind: 'tool_decision', toolUseId, allowed: decision.allow },
               seq: this.nextSeq(),
             });
-            resolve({
-              allow: decision.allow,
-              reason: decision.reason,
-            });
+            // CanUseToolResult is a discriminated union: allow carries an
+            // optional updatedInput (the user's edited args, #32); deny carries
+            // a reason. updatedInput defaults to the original input server-side.
+            if (decision.allow) {
+              resolve({ allow: true, updatedInput: decision.updatedInput ?? (input as Record<string, unknown>) });
+            } else {
+              resolve({ allow: false, reason: decision.reason });
+            }
           },
         });
         this.record({
@@ -308,7 +312,7 @@ export class TurnRunner {
   }
 
   /** User decision on a pending tool request. */
-  respondToTool(toolUseId: string, decision: { allow: boolean; allowRestOfTurn?: boolean; reason?: string }): void {
+  respondToTool(toolUseId: string, decision: { allow: boolean; allowRestOfTurn?: boolean; reason?: string; updatedInput?: Record<string, unknown> }): void {
     const p = this.pendingTools.get(toolUseId);
     if (!p) return;
     this.pendingTools.delete(toolUseId);
@@ -321,9 +325,27 @@ export class TurnRunner {
     const denyReason = (decision.reason && decision.reason.trim())
       ? decision.reason.trim()
       : '用户在手机端拒绝了这个工具调用。';
+    // #32 — only merge known-safe edited fields over the original input, so a
+    // malformed/hostile client can't rewrite arbitrary tool args. The allowlist
+    // is PER-TOOL (no injecting `content` into Bash) and values must be strings.
+    let updatedInput: Record<string, unknown> | undefined;
+    if (decision.allow && decision.updatedInput && typeof decision.updatedInput === 'object') {
+      const base = (p.input && typeof p.input === 'object') ? { ...(p.input as Record<string, unknown>) } : {};
+      const tool = String(p.name || '').toLowerCase();
+      const SAFE = tool === 'bash' ? ['command']
+        : tool === 'write' ? ['file_path', 'content']
+        : (tool === 'edit' || tool === 'multiedit') ? ['file_path']
+        : [];
+      const u = decision.updatedInput as Record<string, unknown>;
+      for (const k of SAFE) {
+        if (k in u && typeof u[k] === 'string') base[k] = u[k];
+      }
+      updatedInput = base;
+    }
     p.resolve({
       allow: decision.allow,
       reason: decision.allow ? undefined : denyReason,
+      updatedInput,
     });
   }
 
