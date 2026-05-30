@@ -2832,6 +2832,13 @@
         );
         return;
       }
+      if (err === 'aborted') {
+        // Secure context here (the insecure case is handled above). On Android
+        // Chrome 'aborted' on first use is almost always the mic-permission
+        // prompt or a first-tap hiccup, not a real failure — grant mic, retry.
+        showToast('语音被打断 (aborted) — 确认已允许麦克风权限，然后再点一次 🎤', 'warn', 5000);
+        return;
+      }
       if (err === 'not-allowed' || err === 'service-not-allowed') {
         showToast('麦克风权限被拒，去浏览器设置开启', 'error', 5000);
         return;
@@ -2866,9 +2873,9 @@
   function startSTT() {
     if (!stt) { showToast('此设备不支持语音识别', 'error'); return; }
     if (recogActive) { Promise.resolve(stt.stop()).catch(() => {}); return; }
-    track('voice_input', { kind: stt.kind });
     try {
       const p = stt.start();
+      track('voice_input', { kind: stt.kind });  // after start() — keep the user-gesture→recog.start() path empty
       if (p && typeof p.then === 'function') {
         p.catch((e) => {
           log('error', 'STT start fail: ' + (e && e.message || e));

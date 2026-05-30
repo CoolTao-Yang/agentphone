@@ -2,7 +2,7 @@
 // offline (the WebSocket of course still needs network). Updates on every
 // /sw.js change because we re-fetch index.html on activate.
 
-const CACHE = 'agentphone-shell-v54';
+const CACHE = 'agentphone-shell-v55';
 
 const SHELL = [
   './',
