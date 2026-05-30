@@ -138,6 +138,8 @@
   let pendingImages = [];
   /** @type {{text:string,images:Array}|null} last prompt sent — for #8 rate-limit auto-resume */
   let lastSentPrompt = null;
+  /** consecutive "process exited with code 1" failures — escalates the hint */
+  let consecutiveProcExit = 0;
   /** #8 — live timers of the (single) active rate-limit card, so clearMessages
    *  can tear them down and a new card supersedes the old one (no leak/zombie). */
   let rlTimers = null;  // { tick, autoTimer } | null
@@ -1524,6 +1526,7 @@
       case 'tool_result':
         return onToolResult(evt.toolUseId, evt.content, evt.isError);
       case 'result':
+        if (evt.success && !evt.isError) consecutiveProcExit = 0;  // healthy turn resets the escalation
         fireDoneNotification(evt);
         return appendResult(evt);
       case 'external_user_prompt':
@@ -1861,6 +1864,19 @@
             // #8 — usage/rate limit: dedicated card w/ countdown + auto-resume
             appendRateLimitCard(msg, parseRateLimitReset(msg));
             showToast('用量受限 · 见卡片', 'error', 3500);
+          } else if (/process exited (with code|unexpectedly)|claude.*ENOENT|process (was )?killed/i.test(msg)) {
+            // claude.exe subprocess died and the SDK swallowed the real cause
+            // (an opaque "exited with code 1"). Usually transient — a rate limit
+            // the SDK didn't surface, network jitter, or a long-running service
+            // that degraded. Give actionable guidance and escalate if repeated.
+            consecutiveProcExit++;
+            const friendly = consecutiveProcExit >= 3
+              ? `⚠ claude 子进程已连续 ${consecutiveProcExit} 次异常退出 (code 1) — 强烈建议重启服务端：` +
+                `\`systemctl --user restart agentphone.service\`。常见诱因：账号限流 / 服务端长跑后状态劣化。`
+              : '⚠ claude 子进程异常退出 (code 1) — 通常是临时的（限流 / 网络抖动 / 服务端需重启）。' +
+                '可先重发一次；若连续失败，重启 agentphone.service。';
+            appendError(friendly);
+            showToast('claude 子进程退出 · 见提示', 'error', 3500);
           } else {
             appendError(msg);
             showToast(msg, 'error', 3500);
