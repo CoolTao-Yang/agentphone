@@ -438,6 +438,15 @@
   function refreshSendDisabled() {
     $send.disabled = busy || isFollowBlocked() || (!$input.value.trim() && pendingImages.length === 0);
   }
+  // Removes any live busy-watchdog banner (one fired earlier and now its
+  // condition no longer holds — turn ended, or fresh events arrived).
+  // Without this, the banner is a sticky snapshot that lies indefinitely
+  // ("思考中已持续 715s 没新动静" while ✓ done is visible below).
+  function dismissBusyWatchdogBanner() {
+    if (!$bannerRow) return;
+    const b = $bannerRow.querySelector('[data-banner-id="busy-watchdog"]');
+    if (b) b.remove();
+  }
   function setBusy(b) {
     busy = b;
     const followBlocked = isFollowBlocked();
@@ -450,9 +459,12 @@
       armBusyWatchdog();
     } else if (followBlocked) {
       setStatus('connected', '👀 CLI 思考中');
+      // No longer "owned-busy" → previous watchdog banner (if any) is stale.
+      dismissBusyWatchdogBanner();
     } else {
       setStatus(ws && ws.readyState === 1 ? 'connected' : '', ws && ws.readyState === 1 ? '已连接' : '断开');
       if (busyWatchdog) { clearTimeout(busyWatchdog); busyWatchdog = null; }
+      dismissBusyWatchdogBanner();
     }
   }
 
@@ -652,12 +664,20 @@
       const silentSec = Math.round((Date.now() - lastEventAt) / 1000);
       if (silentSec < 90) { armBusyWatchdog(); return; }  // events came in between
       log('warn', `busy watchdog: ${silentSec}s without events`);
+      // Don't stack — if a previous watchdog banner already exists, refresh
+      // its text instead of appending another one.
+      dismissBusyWatchdogBanner();
       if (typeof addBanner === 'function') {
         // Drop a one-shot banner with two actions
         const html = `⚠ 「思考中」已持续 ${silentSec}s 没新动静。` +
                      `<button class="banner-act" id="bw-reset">强制清除</button>` +
                      `<button class="banner-act" id="bw-interrupt">让 server 打断</button>`;
         addBanner('warn', html);
+        // Stable id so dismissBusyWatchdogBanner() can find + remove it
+        // when turn_done arrives / fresh events resume.
+        if ($bannerRow && $bannerRow.lastElementChild) {
+          $bannerRow.lastElementChild.dataset.bannerId = 'busy-watchdog';
+        }
         const reset = document.getElementById('bw-reset');
         const intr  = document.getElementById('bw-interrupt');
         if (reset) reset.addEventListener('click', () => {
@@ -1894,6 +1914,8 @@
         }
         case 'agent_event':
           lastEventAt = Date.now();
+          // Fresh server activity → any prior "stuck" banner is invalid now.
+          dismissBusyWatchdogBanner();
           if (m.turnId && m.turnId !== lastTurnId) {
             // Server started a new turn since we last rendered — reset.
             lastTurnId = m.turnId;
