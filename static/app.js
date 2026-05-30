@@ -2996,18 +2996,35 @@
   function startSTT() {
     if (!stt) { showToast('此设备不支持语音识别', 'error'); return; }
     if (recogActive) { Promise.resolve(stt.stop()).catch(() => {}); return; }
+    // Optimistic flip — closes the race where recog.start() is in flight
+    // (queued in the Web Speech API's internal state machine) but onstart
+    // hasn't fired yet, so a double-tap on mic re-enters startSTT(), sees
+    // recogActive=false, and triggers "recognition has already started".
+    // If start() throws synchronously we revert below.
+    recogActive = true;
+    const handleStartFail = (e) => {
+      const m = (e && e.message) || String(e);
+      // The race we just guarded against — SR's actual state is already
+      // "started" though we hadn't seen onstart. Quietly resync and bail.
+      if (/already\s*started/i.test(m)) {
+        log('warn', 'STT start: SR already running — resyncing flag');
+        recogActive = true;  // keep flag consistent with SR's reality
+        $mic.setAttribute('aria-pressed', 'true');
+        return;
+      }
+      recogActive = false;
+      $mic.setAttribute('aria-pressed', 'false');
+      log('error', 'STT start fail: ' + m);
+      showToast('语音启动失败: ' + m, 'error', 4000);
+    };
     try {
       const p = stt.start();
       track('voice_input', { kind: stt.kind });  // after start() — keep the user-gesture→recog.start() path empty
       if (p && typeof p.then === 'function') {
-        p.catch((e) => {
-          log('error', 'STT start fail: ' + (e && e.message || e));
-          showToast('语音启动失败: ' + (e && e.message || e), 'error', 4000);
-        });
+        p.catch(handleStartFail);
       }
     } catch (e) {
-      log('error', 'STT start fail: ' + (e && e.message || e));
-      showToast('语音启动失败: ' + (e && e.message || e), 'error', 4000);
+      handleStartFail(e);
     }
   }
 
@@ -3560,6 +3577,25 @@
     // is only set after the native probe completes, so chain it.
     initSTT().finally(updateEmptyHint);
     connect();
+    // When a newer SW is "installed" while one still controls this page,
+    // the already-rendered shell is using stale CSS/app.js. The user has
+    // no other clue this matters (the SW silently updates in background),
+    // and a fix we shipped (e.g. tool-result wrapping) just won't appear
+    // until they happen to reload. Surface a one-shot banner.
+    let swUpdateBannerShown = false;
+    window.addEventListener('agentphone-sw-update-ready', () => {
+      if (swUpdateBannerShown) return;
+      swUpdateBannerShown = true;
+      if (typeof addBanner !== 'function' || !$bannerRow) return;
+      const html =
+        '<span class="b-msg">🔄 新版已就绪（修复 / 改进 已下载）</span>' +
+        '<button class="banner-act" id="sw-reload-now">刷新</button>';
+      addBanner('info', html);
+      const btn = document.getElementById('sw-reload-now');
+      if (btn) btn.addEventListener('click', () => {
+        try { location.reload(); } catch {}
+      });
+    });
     // Fire-and-forget; banner appears within a few hundred ms when relevant.
     setTimeout(() => { maybeShowApkUpdateBanner().catch(() => {}); }, 500);
   }

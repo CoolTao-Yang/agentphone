@@ -28,7 +28,26 @@
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
-        navigator.serviceWorker.register('./sw.js').catch((e) => console.warn('sw register failed', e));
+        navigator.serviceWorker.register('./sw.js').then((reg) => {
+          // Watch for a newer SW becoming installed (the next time CACHE
+          // bumps in sw.js). Once it's "installed" while one is still
+          // controlling the current page, signal the app to prompt the
+          // user — fresh CSS/app.js were just fetched but the open page
+          // is still showing the old shell.
+          const announce = () => {
+            window.dispatchEvent(new CustomEvent('agentphone-sw-update-ready'));
+          };
+          if (reg.waiting) announce();
+          reg.addEventListener('updatefound', () => {
+            const w = reg.installing;
+            if (!w) return;
+            w.addEventListener('statechange', () => {
+              if (w.state === 'installed' && navigator.serviceWorker.controller) {
+                announce();
+              }
+            });
+          });
+        }).catch((e) => console.warn('sw register failed', e));
       });
     }
   </script>
