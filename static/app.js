@@ -2979,9 +2979,25 @@
       start() {
         // CRITICAL: no async gap before recog.start() — Chrome treats it as
         // breaking the user-gesture chain and aborts within 1 RAF.
-        recog.start();
+        try {
+          recog.start();
+        } catch (e) {
+          // "recognition has already started" / InvalidStateError: SR is still
+          // alive but our recogActive flag desynced (onend hadn't fired before
+          // the user re-tapped). Abort to force a clean onend + resync state;
+          // a second tap then starts fresh. Fixes the stuck "already started".
+          const m = String((e && (e.name + ' ' + e.message)) || '');
+          if (/already started|InvalidStateError/i.test(m)) {
+            try { recog.abort(); } catch {}
+            recogActive = false;
+            $mic.setAttribute('aria-pressed', 'false');
+            showToast('语音已重置 · 再点一次 🎤', 'warn', 2500);
+          } else {
+            throw e;
+          }
+        }
       },
-      stop() { recog.stop(); },
+      stop() { try { recog.stop(); } catch {} },
     };
     $mic.dataset.backend = 'web';
     // Browser HTTP context: Web Speech almost certainly aborts. Pre-flag

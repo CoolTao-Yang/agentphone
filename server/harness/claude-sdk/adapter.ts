@@ -67,7 +67,21 @@ function stringifyToolResultContent(c: unknown): string {
   if (typeof c === 'string') return c;
   if (Array.isArray(c)) {
     return c
-      .map((x: any) => (typeof x?.text === 'string' ? x.text : JSON.stringify(x)))
+      .map((x: any) => {
+        if (typeof x?.text === 'string') return x.text;
+        // Image blocks (e.g. Read on a PNG, or a tool returning a screenshot)
+        // carry tens of KB of base64. JSON.stringify'ing it dumps the whole
+        // blob — and because the JSON braces/quotes break the client's
+        // base64-detection regex, it gets rendered as raw text that buries the
+        // conversation. Summarize to a compact placeholder instead.
+        if (x?.type === 'image') {
+          const mt = x?.source?.media_type || 'image';
+          const b64 = typeof x?.source?.data === 'string' ? x.source.data : '';
+          const kb = b64 ? Math.round((b64.length * 3) / 4 / 1024) : 0;
+          return `[图片: ${mt}${kb ? ` · ~${kb}KB` : ''}]`;
+        }
+        return JSON.stringify(x);
+      })
       .join('\n');
   }
   return JSON.stringify(c);
