@@ -272,17 +272,41 @@
   // half-formed pipe rows / open ``` / unclosed inline `code` don't get
   // mangled into ugly HTML during streaming. block_end calls renderMarkdown
   // directly on the full content for the final clean render.
+  // A streaming tail is "safe to render through marked" if it already
+  // contains the *structure* of a markdown table (header row + separator
+  // row): the in-progress last row may be partial but marked's GFM parser
+  // tolerates that. Without this, every streamed table shows as raw
+  // `| col | col |` pipes until the NEXT \n\n lands — which for the final
+  // table of a response can mean "ugly pipes forever."
+  function streamTailLooksLikeTable(text) {
+    const lines = text.split('\n');
+    if (lines.length < 2) return false;
+    for (let i = 1; i < lines.length; i++) {
+      // GFM separator row: `|---|---|`, `| :--- | ---: |`, etc.
+      if (/^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(lines[i])
+          && /\|/.test(lines[i - 1])) {
+        return true;
+      }
+    }
+    return false;
+  }
   function renderMarkdownStream(text) {
     const lastBreak = text.lastIndexOf('\n\n');
     if (lastBreak < 0) {
+      if (streamTailLooksLikeTable(text)) return renderMarkdown(text);
       return `<div class="stream-tail">${escapeHtml(text)}</div>`;
     }
     const safe = text.slice(0, lastBreak);
     const tail = text.slice(lastBreak + 2);
     const safeHtml = renderMarkdown(safe);
-    const tailHtml = tail.trim()
-      ? `\n<div class="stream-tail">${escapeHtml(tail)}</div>`
-      : '';
+    let tailHtml;
+    if (!tail.trim()) {
+      tailHtml = '';
+    } else if (streamTailLooksLikeTable(tail)) {
+      tailHtml = '\n' + renderMarkdown(tail);
+    } else {
+      tailHtml = `\n<div class="stream-tail">${escapeHtml(tail)}</div>`;
+    }
     return safeHtml + tailHtml;
   }
 
@@ -1086,10 +1110,46 @@
   // Tool RESULT body: cap long output at N lines + inline expand (avoids a
   // nested scroll box fighting the page scroll on mobile).
   const RESULT_CAP = 16;
+  // Crude but reliable heuristic for "this is base64-encoded binary, not
+   // meant to be read." A Read tool on a PNG dumps tens of KB of
+   // [A-Za-z0-9+/=] with very few newlines, and rendering it raw blew up
+   // the whole screen (and the layout cap) for the user.
+   function looksLikeBinaryBlob(text) {
+     if (text.length < 4000) return false;
+     const head = text.slice(0, 5000);
+     const nlCount = (head.match(/\n/g) || []).length;
+     // base64 lines are typically 60–80 chars; raw blobs often have 0 \n.
+     // Anything with >100 chars/line on average and the base64 alphabet wins.
+     if (nlCount > 80) return false;
+     const charsPerLine = head.length / (nlCount + 1);
+     if (charsPerLine < 120) return false;
+     return /^[A-Za-z0-9+/=\r\n\s]+$/.test(head);
+   }
   function buildResultEl(content, isError) {
     const text = String(content ?? '');
+    // Binary / base64 path — short summary + opt-in expand. Without this
+    // a single image embed pushes the rest of the conversation off-screen.
+    if (looksLikeBinaryBlob(text)) {
+      const wrap = document.createElement('div');
+      const r = document.createElement('div');
+      r.className = 't-result' + (isError ? ' err' : '');
+      const kb = (text.length / 1024).toFixed(1);
+      r.textContent = `[二进制 / base64 数据 · ${text.length.toLocaleString()} 字节 (~${kb} KB) — 已折叠]`;
+      const more = document.createElement('button');
+      more.className = 'diff-more';
+      more.type = 'button';
+      more.textContent = '▾ 展开原始数据';
+      more.addEventListener('click', () => { r.textContent = text; more.remove(); });
+      wrap.appendChild(r);
+      wrap.appendChild(more);
+      return wrap;
+    }
     const lines = text.split('\n');
-    if (lines.length <= RESULT_CAP) {
+    // Char-level safety net: even text content this big means scroll hell.
+    // 8000 chars ≈ ~150 lines of code which is plenty for a first look.
+    const CHAR_CAP = 8000;
+    const overChars = text.length > CHAR_CAP;
+    if (lines.length <= RESULT_CAP && !overChars) {
       const r = document.createElement('div');
       r.className = 't-result' + (isError ? ' err' : '');
       r.textContent = text;
@@ -1098,11 +1158,20 @@
     const wrap = document.createElement('div');
     const r = document.createElement('div');
     r.className = 't-result' + (isError ? ' err' : '');
-    r.textContent = lines.slice(0, RESULT_CAP).join('\n');
+    let shown;
+    let hiddenLabel;
+    if (overChars) {
+      shown = text.slice(0, CHAR_CAP);
+      hiddenLabel = `▾ 展开剩余 ${text.length - CHAR_CAP} 字符`;
+    } else {
+      shown = lines.slice(0, RESULT_CAP).join('\n');
+      hiddenLabel = `▾ 展开剩余 ${lines.length - RESULT_CAP} 行`;
+    }
+    r.textContent = shown;
     const more = document.createElement('button');
     more.className = 'diff-more';
     more.type = 'button';
-    more.textContent = `▾ 展开剩余 ${lines.length - RESULT_CAP} 行`;
+    more.textContent = hiddenLabel;
     more.addEventListener('click', () => { r.textContent = text; more.remove(); });
     wrap.appendChild(r);
     wrap.appendChild(more);
