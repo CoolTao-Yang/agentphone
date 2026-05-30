@@ -889,6 +889,7 @@ footer.dropping::before {
   background: var(--surface); color: var(--muted); border-color: var(--border);
   cursor: not-allowed;
 }
+.action.mic { position: relative; }
 .action.mic[aria-pressed="true"] {
   background: var(--error); border-color: var(--error); color: #fff;
   animation: pulse-rec 1s ease-in-out infinite;
@@ -897,6 +898,38 @@ footer.dropping::before {
   0%, 100% { box-shadow: 0 0 0 0 rgba(248, 113, 113, 0.55); }
   50%      { box-shadow: 0 0 0 10px rgba(248, 113, 113, 0); }
 }
+/* Native voice indicator: small green dot on the mic when the Capacitor
+   speech-recognition plugin is live. Without this users can't tell
+   whether tapping 🎤 will actually work — APK has it, HTTP browser
+   doesn't, and they look identical otherwise. */
+.action.mic[data-backend="native"]::after {
+  content: '';
+  position: absolute;
+  top: 1px; right: 1px;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: #34d399;
+  border: 2px solid var(--bg);
+  pointer-events: none;
+}
+.action.mic[data-backend="none"] {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+/* Inline call-to-action button used inside expandable banners (e.g. the
+   "HTTP voice unavailable" banner's download-APK link). */
+.banner .b-action-inline {
+  display: inline-block;
+  background: var(--accent); color: #1a0f00;
+  font-weight: 700;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  padding: 4px 10px;
+  margin: 4px 0;
+  font-size: 12px;
+  text-decoration: none;
+}
+.banner .b-action-inline:active { transform: scale(0.96); }
 .action.stop {
   background: var(--error); border-color: var(--error); color: #fff;
 }

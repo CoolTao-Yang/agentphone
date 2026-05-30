@@ -369,11 +369,22 @@
     });
   }
 
-  function showToast(text, kind = 'info', ms = 2400) {
+  function showToast(text, kind = 'info', ms = 2400, opts) {
     $toast.textContent = text;
     $toast.className = 'toast show' + (kind && kind !== 'info' ? ' ' + kind : '');
+    // Optional tap action (e.g. "tap toast to download APK"). Cleared on
+    // dismiss so a later passive toast can't accidentally inherit a stale
+    // handler. Used by the STT-error path so the user isn't stuck reading
+    // a URL they can't tap.
+    const onClick = opts && opts.onClick;
+    $toast.style.cursor = onClick ? 'pointer' : '';
+    $toast.onclick = onClick || null;
     clearTimeout(showToast._t);
-    showToast._t = setTimeout(() => $toast.classList.remove('show'), ms);
+    showToast._t = setTimeout(() => {
+      $toast.classList.remove('show');
+      $toast.onclick = null;
+      $toast.style.cursor = '';
+    }, ms);
   }
 
   function log(level, msg) {
@@ -2775,6 +2786,17 @@
               try { await capPlugin.stop(); } catch {}
             },
           };
+          // Visible confirmation — without this, APK users can't tell the
+          // native plugin actually loaded (the mic button looks identical
+          // to the broken browser-HTTP case). Green dot via CSS + title.
+          $mic.dataset.backend = 'native';
+          $mic.title = '原生语音输入 (zh-CN, 不需要 HTTPS)';
+          // One-time celebratory toast on first APK launch where native
+          // is confirmed. Persistent flag — same APK, no nagging.
+          if (!localStorage.getItem('agentphone:nativeVoiceConfirmed')) {
+            showToast('🎤 原生语音已就绪 — 按麦克风试试', 'info', 3500);
+            localStorage.setItem('agentphone:nativeVoiceConfirmed', '1');
+          }
           log('info', 'STT: using native Capacitor plugin');
           return;
         }
@@ -2787,8 +2809,8 @@
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) {
       log('warn', 'SpeechRecognition unavailable');
-      $mic.title = '此浏览器不支持语音识别';
-      $mic.style.opacity = '0.4';
+      $mic.title = '此浏览器不支持语音识别 — 装 native APK';
+      $mic.dataset.backend = 'none';
       return;
     }
     if (!window.isSecureContext && location.hostname !== 'localhost') {
@@ -2825,10 +2847,13 @@
       log('error', `STT err: ${err} (secure=${window.isSecureContext})`);
       if (err === 'no-speech') return; // common, don't toast
       if (!window.isSecureContext && (err === 'aborted' || err === 'not-allowed' || err === 'service-not-allowed')) {
-        // The native APK path bypasses this entirely — point users there.
+        // The native APK path bypasses this entirely — make the prompt
+        // tappable so the user can act on it from one finger, no need
+        // to remember/type the URL.
         showToast(
-          '语音需要 native APK（绕过 HTTPS 限制）：/api/download-apk',
-          'error', 9000
+          '🎤 浏览器语音被拒 — 点这里下载 native APK',
+          'error', 9000,
+          { onClick: () => { window.location.href = '/api/download-apk'; } }
         );
         return;
       }
@@ -2867,6 +2892,13 @@
       },
       stop() { recog.stop(); },
     };
+    $mic.dataset.backend = 'web';
+    // Browser HTTP context: Web Speech almost certainly aborts. Pre-flag
+    // the mic button so users see it's not 'green' (no badge) — the
+    // existing maybeShowHttpsBanner() then explains the path.
+    if (!window.isSecureContext && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+      $mic.title = '浏览器 STT 需要 HTTPS — 装 native APK 绕过';
+    }
     log('info', 'STT: using Web Speech API');
   }
 
@@ -3099,16 +3131,34 @@
       '<details>' +
         '<summary>' +
           '<span class="b-msg">⚠ HTTP · 🎤 语音不可用</span>' +
-          '<span class="b-hint">▾ 怎么开</span>' +
+          '<span class="b-hint">▾ 怎么办</span>' +
         '</summary>' +
         '<div class="b-body">' +
-          'host (Windows) 上跑：<br>' +
-          '<code>tailscale serve --bg https / http://localhost:8765</code><br>' +
-          '然后用它给的 <code>https://*.ts.net</code> URL 换掉书签即可。' +
-          '<br>或者装 native APK: <code>/api/download-apk</code> — 原生语音不需要 HTTPS。' +
+          '<strong>推荐</strong>：装 native APK,原生语音不需要 HTTPS:<br>' +
+          '<a class="b-action-inline" href="/api/download-apk">⬇ 下载 APK</a>' +
+          '<br><br>' +
+          '<strong>或者</strong>：在 host (Windows) 上起 HTTPS:<br>' +
+          '<code>tailscale serve --bg http://localhost:8765</code><br>' +
+          '然后用 <code>https://*.ts.net</code> URL 换掉浏览器书签。' +
         '</div>' +
       '</details>'
     );
+  }
+  // Empty-state hint adapts to which STT backend (if any) actually loaded.
+  // Without this, browser-HTTP users see "按 🎤 语音输入" which then errors
+  // and APK users get the same generic text with no signal native is on.
+  function updateEmptyHint() {
+    const hint = document.getElementById('empty-hint');
+    if (!hint) return;
+    const backend = $mic && $mic.dataset && $mic.dataset.backend;
+    if (backend === 'native') {
+      hint.innerHTML = '敲字 → <kbd>↑</kbd> 发送 / 🎤 原生语音输入 ✓';
+    } else if (backend === 'web') {
+      hint.innerHTML = '敲字 → <kbd>↑</kbd> 发送 / 按 🎤 语音输入。';
+    } else {
+      // 'none' or undefined — STT not available; nudge to APK.
+      hint.innerHTML = '敲字 → <kbd>↑</kbd> 发送。语音需 <a href="/api/download-apk" style="color:var(--accent);text-decoration:underline;">native APK</a>。';
+    }
   }
 
   // ─── in-app APK update check ─────────────────────────────────────
@@ -3415,7 +3465,9 @@
     }
     maybeShowHttpsBanner();
     maybeAskNotifyPermission();
-    initSTT();
+    // initSTT is async — updateEmptyHint reads $mic.dataset.backend which
+    // is only set after the native probe completes, so chain it.
+    initSTT().finally(updateEmptyHint);
     connect();
     // Fire-and-forget; banner appears within a few hundred ms when relevant.
     setTimeout(() => { maybeShowApkUpdateBanner().catch(() => {}); }, 500);
