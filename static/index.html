@@ -487,6 +487,20 @@
     </div>
   </div>
 
+  <!-- merge result: the condensed block, copyable so it can be pasted as the
+       next prompt (no CLI resume needed). -->
+  <div class="modal-backdrop" id="merge-modal">
+    <div class="modal">
+      <h3 id="merge-title">合并内容已就绪</h3>
+      <label>把下面这段作为<b>下一条 prompt</b> 发给 CLI 即可让它接续 —— 不用 resume。</label>
+      <textarea id="merge-text" readonly></textarea>
+      <div class="modal-actions">
+        <button class="modal-btn" data-close>关闭</button>
+        <button class="modal-btn primary" id="merge-copy">📋 复制</button>
+      </div>
+    </div>
+  </div>
+
   <!-- settings sheet — model picker (w/ descriptions) + effort + toggles. -->
   <div class="sheet-backdrop" id="settings-bd"></div>
   <section class="sheet" id="settings-sheet" role="dialog" aria-label="设置" aria-modal="true">

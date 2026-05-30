@@ -162,7 +162,11 @@ export type ServerMessage =
   // A session's attention state changed (UX-BACKLOG #9). Broadcast to ALL
   // connected clients so every drawer updates its unread marker live, even
   // for sessions the client isn't currently subscribed to. null = cleared.
-  | { type: 'attention'; sessionId: string; kind: AttentionKind | null };
+  | { type: 'attention'; sessionId: string; kind: AttentionKind | null }
+  // Result of a merge_to_external: the condensed context block. The client can
+  // show it with a copy button so the user pastes it as their next prompt — no
+  // CLI `resume` needed (the block is also queued in the jsonl as a fallback).
+  | { type: 'merge_result'; turns: number; text: string };
 
 export type ExternalSessionStatus = {
   pid: number;

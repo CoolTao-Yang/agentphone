@@ -582,7 +582,7 @@
           externalSessionId: currentLinkExternalSid,
         });
         track('merge');
-        showToast('合并请求已发送 · 见桌面 CLI', 'ok', 2200);
+        showToast('合并中…', 'info', 1500);
       });
     }
     $bannerRow.appendChild(b);
@@ -1912,6 +1912,11 @@
           }
           break;
         }
+        case 'merge_result':
+          // Option 2: show the condensed block so it can be pasted as the next
+          // prompt — no resume. (Still queued in the jsonl as a fallback.)
+          showMergeResult(m.turns, m.text);
+          break;
         case 'agent_event':
           lastEventAt = Date.now();
           // Fresh server activity → any prior "stuck" banner is invalid now.
@@ -3223,12 +3228,38 @@
   $rnSave.addEventListener('click', saveRename);
   document.querySelectorAll('[data-close]').forEach((b) => {
     b.addEventListener('click', () => {
+      const bd = b.closest('.modal-backdrop');
+      if (bd) { bd.classList.remove('open'); return; }
       $newModal.classList.remove('open');
       $renameModal.classList.remove('open');
     });
   });
   $newModal.addEventListener('click', (e) => { if (e.target === $newModal) $newModal.classList.remove('open'); });
   $renameModal.addEventListener('click', (e) => { if (e.target === $renameModal) $renameModal.classList.remove('open'); });
+
+  // ── merge result modal (Option 2: paste-as-next-prompt, no resume) ──
+  const $mergeModal = document.getElementById('merge-modal');
+  const $mergeText  = document.getElementById('merge-text');
+  const $mergeCopy  = document.getElementById('merge-copy');
+  const $mergeTitle = document.getElementById('merge-title');
+  function showMergeResult(turns, text) {
+    if (!$mergeModal) return;
+    if ($mergeTitle) $mergeTitle.textContent = `合并内容已就绪 · ${turns} 轮`;
+    if ($mergeText) $mergeText.value = text || '';
+    $mergeModal.classList.add('open');
+  }
+  if ($mergeModal) $mergeModal.addEventListener('click', (e) => { if (e.target === $mergeModal) $mergeModal.classList.remove('open'); });
+  if ($mergeCopy) $mergeCopy.addEventListener('click', async () => {
+    const text = ($mergeText && $mergeText.value) || '';
+    let ok = false;
+    try { await navigator.clipboard.writeText(text); ok = true; }
+    catch {
+      // clipboard API blocked (non-secure context / permissions) → fall back to
+      // selecting the textarea so the user can long-press → copy manually.
+      try { $mergeText.focus(); $mergeText.select(); ok = document.execCommand && document.execCommand('copy'); } catch {}
+    }
+    showToast(ok ? '已复制 · 粘贴成下一条 prompt 即可' : '复制失败 · 手动长按选中复制', ok ? 'ok' : 'warn', 2600);
+  });
 
   // ─── v3.7 helpers (effort menu / banner / notifications) ──────
   let notifyOnDone = false;

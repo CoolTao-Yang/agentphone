@@ -720,7 +720,9 @@ function createHandler(c: any, cfg: Cfg) {
             `[ws] merged phone ${msg.phoneSessionId.slice(0, 8)} → cmax ${msg.externalSessionId.slice(0, 8)} ` +
             `(${result.turnsMerged} turns, uuid=${result.uuid.slice(0, 8)})`,
           );
-          send({ type: 'error', message: `已合并 ${result.turnsMerged} 轮到 CLI queue · 桌面按 Enter 才会让 claude 处理` });
+          // Hand the condensed block back so the user can paste it as their next
+          // prompt — no resume needed (it's also queued in the jsonl as before).
+          send({ type: 'merge_result', turns: result.turnsMerged, text: result.block });
         } catch (err) {
           send({ type: 'error', message: '合并失败: ' + (err instanceof Error ? err.message : String(err)) });
         }

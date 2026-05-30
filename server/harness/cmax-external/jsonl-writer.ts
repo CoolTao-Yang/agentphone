@@ -261,7 +261,7 @@ export async function mergeFromPhoneSession(
   externalSessionId: string,
   phoneJsonlPath: string,
   opts: { phoneSessionLabel?: string; externalCwd?: string } = {},
-): Promise<{ uuid: string; turnsMerged: number }> {
+): Promise<{ uuid: string; turnsMerged: number; block: string }> {
   const turns = await readPhoneTurns(phoneJsonlPath);
   const label = opts.phoneSessionLabel || phoneSessionLabel(phoneJsonlPath);
   const block = formatMergeBlock(turns, label);
@@ -269,7 +269,10 @@ export async function mergeFromPhoneSession(
     cwd: opts.externalCwd,
     permissionMode: 'default',
   });
-  return { uuid, turnsMerged: turns.length };
+  // Also return the block text so the caller can hand it straight back to the
+  // client — letting the user paste it as their NEXT prompt (no resume needed),
+  // not just rely on the jsonl-queue-then-resume path.
+  return { uuid, turnsMerged: turns.length, block };
 }
 
 type PhoneTurn = { userText: string; assistantText: string };
